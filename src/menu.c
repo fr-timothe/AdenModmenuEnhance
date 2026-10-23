@@ -107,9 +107,6 @@ static void load_items(void){
     }
     aden_log("loaded %d items", s_nitems);
 }
-/* lookups used by the pocket scanner */
-void aden_item_bitmap(u8* bits){ if(!s_items_loaded) load_items(); for(int i=0;i<s_nitems;i++){ u16 id=s_items[i].id; bits[id>>3]|=1<<(id&7);} }
-const char* aden_item_name(u16 id){ if(!s_items_loaded) load_items(); for(int i=0;i<s_nitems;i++) if(s_items[i].id==id) return s_items[i].name; return "?"; }
 /* search */
 static char s_query[24]; static int s_qlen;
 static int* s_match; static int s_nmatch;
@@ -173,12 +170,6 @@ static int s_was_open, s_armed;
 #define ROW0 0
 #define LIST 18
 #define MODLIST 17   /* mod rows that fit above the message line */
-
-static void draw_tabs(void){
-    char b[72]; int n=0;
-    for(int i=0;i<NTABS;i++) n+=aden_snprintf(b+n,sizeof b-n,i==s_tab?"[%s] ":" %s  ",TABNAME[i]);
-    put(1,0,C_SEL,"%s    L/R",b);
-}
 
 static void tab_items(void){
     if(!s_items_loaded) load_items();
