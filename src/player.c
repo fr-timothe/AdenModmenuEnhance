@@ -17,10 +17,10 @@ static uptr s_copy[MAXCOPIES]; static int s_ncopies;
    Never read GPU-mapped pages: on Eden one CPU read makes reactive flushing copy
    that buffer back from the GPU every frame for the rest of the session. */
 #define MI_PLAIN(mi) (((mi).attr&7)==0)
-/* searches share the CPU with the game: nap at every SCAN_CHUNK boundary (~1.6 s of naps per 4 GB),
-   then re-check the region, since the game may remap memory while we sleep */
-#define SCAN_CHUNK  0x40000
-#define SCAN_NAP    100000     /* ns */
+/* searches share the CPU with the game: nap at every SCAN_CHUNK boundary (~1k naps per 4 GB: few, since
+   Eden can round a guest sleep up to 1-15 ms), then re-check the region, since the game may remap memory while we sleep */
+#define SCAN_CHUNK  0x400000
+#define SCAN_NAP    1000000    /* ns */
 #define SEARCH_PRIO 24         /* below the game's default 16, so its threads preempt ours */
 static int scan_nap(uptr a, uptr* end){
     nn_os_SleepThread(SCAN_NAP);
