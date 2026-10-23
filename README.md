@@ -61,7 +61,7 @@ This repo contains **no Nintendo files**. Dump your own copy of the game (RomFS 
 | Output | Command |
 |---|---|
 | `main.npdm` (adds SVC permissions) | `python3 tools/patch_npdm.py <exefs>/main.npdm main.npdm` |
-| `sd:/aden/items.txt` | `python3 tools/make_items.py <romfs>/Message/String_USen <out>/items.txt` (unpack String_USen.sarc.zs first with `tools/lib/sarc.py`) |
+| `sd:/aden/items.txt` | `python3 tools/make_items.py <romfs>/Message/String_USen <out>/items.txt <romfs>/Bcsv` (the Bcsv dir gives stack sizes; without it every item stacks to 1; unpack String_USen.sarc.zs first with `tools/lib/sarc.py`) |
 | phone app name | `python3 tools/make_text.py <romfs>/Message <out>/Message USen EUen` |
 | phone app icon | `python3 tools/make_icon.py <romfs>/Layout/LMenuDeviceBtn.Nin_NX_NVN.zs assets/A_icon.png <out>/Layout/LMenuDeviceBtn.Nin_NX_NVN.zs` |
 
