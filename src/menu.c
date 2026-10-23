@@ -18,7 +18,7 @@ u32 aden_turnip_sell(void); u32 aden_turnip_buy(void); void aden_turnip_set(int,
 int aden_villager_info(int,const char**,int*,int*); void aden_villager_friend(int,u8); void aden_villager_moving(int,int);
 u32 aden_wallet_get(void); void aden_wallet_set(u32); int aden_pocket_add(u16 id,int qty,int stack);
 extern volatile int g_player_state;
-extern volatile int g_menu_open;
+extern volatile int g_menu_open, g_input_hold;
 
 enum { B_A=1<<0, B_B=1<<1, B_X=1<<2, B_Y=1<<3, B_L=1<<6, B_R=1<<7, B_ZL=1<<8, B_ZR=1<<9, B_PLUS=1<<10, B_MINUS=1<<11,
        B_LEFT=1<<12, B_UP=1<<13, B_RIGHT=1<<14, B_DOWN=1<<15, S_LEFT=1<<16, S_UP=1<<17, S_RIGHT=1<<18, S_DOWN=1<<19 };
@@ -414,7 +414,8 @@ static void draw_tabs_text(void){
 void aden_menu_draw(void){
     extern volatile int g_aden_open_request;
     if(g_aden_open_request && !g_menu_open){ g_menu_open=1; s_armed=0; }
-    if(!g_menu_open){ s_was_open=0; return; }
+    /* after closing, give input back to the game only once the closing B (and all else) is released */
+    if(!g_menu_open){ s_was_open=0; if(g_input_hold && aden_input_take()==0) g_input_hold=0; return; }
     if(!s_was_open){ s_was_open=1; aden_log("menu opened"); }
     poll();
     /* ignore input until every button from the phone tap has been released */
@@ -436,5 +437,5 @@ void aden_menu_draw(void){
     gfx_text(TX,PY0-18,1.6f,C_TITLE,"Aden Modmenu");
     draw_tabs_text();
     flush(TX,CY);
-    if(pr(B_B) && !s_typing){ g_menu_open=0; g_aden_open_request=0; s_status[0]=0; aden_log("menu closed"); }
+    if(pr(B_B) && !s_typing){ g_input_hold=1; g_menu_open=0; g_aden_open_request=0; s_status[0]=0; aden_log("menu closed"); }
 }

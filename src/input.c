@@ -1,6 +1,7 @@
 #include "nn.h"
 /* Controller input: we read buttons for the menu and hide them from the game while it is open. */
 volatile int g_menu_open;
+volatile int g_input_hold;   /* set at close: keep hiding input until the menu sees every button released */
 static volatile u64 s_btn; static volatile s32 s_ly, s_lx;
 typedef int (*GetFn)(NpadState*, int, const u32*);
 #define HOOK(name) static GetFn o_##name; static int h_##name(NpadState* st,int c,const u32* id){ int r=o_##name(st,c,id); return filt(st,r); }
@@ -9,7 +10,7 @@ static int filt(NpadState* st, int r){
         __atomic_or_fetch(&s_btn, st[0].buttons, __ATOMIC_RELAXED);
         if(st[0].ly>8000||st[0].ly<-8000) s_ly=st[0].ly;
         if(st[0].lx>8000||st[0].lx<-8000) s_lx=st[0].lx;
-        if(g_menu_open) for(int i=0;i<r;i++){ st[i].buttons=0; st[i].lx=st[i].ly=st[i].rx=st[i].ry=0; }
+        if(g_menu_open||g_input_hold) for(int i=0;i<r;i++){ st[i].buttons=0; st[i].lx=st[i].ly=st[i].rx=st[i].ry=0; }
     }
     return r;
 }
