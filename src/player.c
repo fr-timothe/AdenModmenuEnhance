@@ -235,7 +235,10 @@ int aden_pocket_add(u16 id, int qty, int stack){
     int placed=0;
     while(qty>0){
         int slot=-1;
-        for(u32 i=0;i<size && i<40;i++){ uptr s= i<20 ? P+i*8 : P-0xB8+(i-20)*8; if(*(u16*)s==0xFFFE){ slot=i; break; } }
+        /* copies can differ: a slot is free only if it is empty in every copy we write */
+        for(u32 i=0;i<size && i<40 && slot<0;i++){ int c=0;
+            while(c<s_ncopies && *(u16*)(i<20 ? s_copy[c]+i*8 : s_copy[c]-0xB8+(i-20)*8)==0xFFFE) c++;
+            if(c==s_ncopies) slot=i; }
         if(slot<0) break;
         int n = stack>1 ? (qty>stack?stack:qty) : 1;
         for(int c=0;c<s_ncopies;c++){
@@ -423,12 +426,14 @@ int aden_reactions_known(void){
 }
 
 /* ---- home storage ---- */
+/* copies can differ: a slot is free only if it is empty in every copy we write */
+static int chest_free(int i){ for(int c=0;c<s_npb;c++) if(*(u16*)(s_pb[c]+PERS_CHEST+i*8)!=0xFFFE) return 0; return 1; }
 int aden_storage_add(u16 id,int qty,int stack){
     if(!aden_player_ready() || !s_npb) return -1;   /* also catches stale copies before writing */
     uptr S0=s_pb[0]+PERS_CHEST; int placed=0, slot=0;
     for(int i=0;i<64;i++) if(!slot_ok((u8*)(S0+i*8))){ aden_log("storage looks wrong, not touching it"); return -1; }
     while(qty>0){
-        while(slot<CHEST_N && *(u16*)(S0+slot*8)!=0xFFFE) slot++;
+        while(slot<CHEST_N && !chest_free(slot)) slot++;
         if(slot>=CHEST_N) break;
         int n = stack>1 ? (qty>stack?stack:qty) : 1;
         for(int c=0;c<s_npb;c++){
@@ -441,8 +446,8 @@ int aden_storage_add(u16 id,int qty,int stack){
     return placed;
 }
 int aden_storage_free(void){
-    if(!pers_ok()) return 0; uptr S0=s_pb[0]+PERS_CHEST; int n=0;
-    for(int i=0;i<CHEST_N;i++) if(*(u16*)(S0+i*8)==0xFFFE) n++;
+    if(!pers_ok()) return 0; int n=0;
+    for(int i=0;i<CHEST_N;i++) if(chest_free(i)) n++;
     return n;
 }
 
