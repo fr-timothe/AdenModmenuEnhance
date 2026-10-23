@@ -36,6 +36,10 @@ static Player s_players[MAXPLAYERS]; static int s_nplayers, s_active;
 
 volatile int g_player_state;   /* 0 idle, 1 searching, 2 ready, 3 not found */
 volatile int g_island_state;   /* 0 idle, 1 searching, 2 ready, 3 not found */
+/* island thread: s_th2_run is 1 from start until the thread's last store; s_island_stale marks
+   the result in flight (or held) as obsolete. Only the island thread moves the state off 1. */
+static volatile int s_th2_run, s_island_stale;
+static void island_drop(void);
 static OsThread s_th; static u8 s_stack[0x8000] __attribute__((aligned(0x1000)));
 void aden_item_bitmap(u8* bits);
 static u8 s_valid[0x10000/8];
@@ -188,7 +192,7 @@ const char* aden_player_name(int i){ return (i>=0 && i<s_nplayers) ? s_players[i
 void aden_player_select(int i){
     if(g_player_state!=2 || i<0 || i>=s_nplayers || i==s_active) return;
     use_player(i);
-    g_island_state=0;   /* friendship is per player */
+    island_drop();   /* friendship is per player */
     aden_log("switched to player %s (%d copies)", s_players[i].name, s_ncopies);
 }
 static int s_th_used, s_th2_used;
@@ -216,7 +220,7 @@ static int still_ok(void){
         if(++s_bad<STALE_CHECKS) return 0;
         aden_log("player copy %d at %lx went stale, searching again", i, s_copy[i]);
         s_ncopies=0; s_npb=0; s_bad=0; for(int f=0;f<3;f++) s_fields[f].n=0;
-        if(g_island_state!=1){ s_nmb=0; g_island_state=0; }   /* a running island search keeps its result */
+        if(!__atomic_load_n(&s_th2_run,__ATOMIC_ACQUIRE)){ s_nmb=0; g_island_state=0; }   /* a running island search keeps its result */
         g_player_state=0;
         return 0;
     }
@@ -309,16 +313,24 @@ static int kabu_ok(uptr k){
     const u32* v=(const u32*)k; for(int i=0;i<15;i++) if(v[i]>1000) return 0;
     return v[15]<4;
 }
+/* taken from s_pb[0] by the render thread before the island thread starts: the player search may rewrite s_pb meanwhile */
+static u32 s_town[6], s_ph[4];
+static void island_drop(void){
+    /* drop the island result, or mark a running search obsolete: it then ends in state 0 and
+       the next aden_island_find starts again. A flag set just after the thread checked it is
+       caught by aden_island_ready. */
+    __atomic_store_n(&s_island_stale,1,__ATOMIC_SEQ_CST);
+    if(!__atomic_load_n(&s_th2_run,__ATOMIC_SEQ_CST)){ s_nmb=0; g_island_state=0; }
+}
 static void find_main(void){
-    s_nmb=0; if(!s_npb) { g_island_state=3; return; }
-    const u8* town=(const u8*)(s_pb[0]+PERS_ID); u32 tid=*(const u32*)town;
-    if(!tid){ aden_log("no town id"); g_island_state=3; return; }
+    const u8* town=(const u8*)s_town; u32 tid=s_town[0];
+    uptr mb[4]; int nmb=0;
     /* if the personal save carries the 3.0 file header, the island save must too */
-    const u32* ph=(const u32*)s_pb[0];
+    const u32* ph=s_ph;
     int need_hdr = ph[0]==0xA0002 && ph[1]==0xA0028;
     aden_log("personal header %x %x %x %x -> %s", ph[0],ph[1],ph[2],ph[3], need_hdr?"using header check":"no header, using layout check");
     uptr a=0; MemoryInfo mi; u32 pi; int hits=0; u64 t0=nn_os_GetSystemTick();
-    while(a<0x8000000000ul && s_nmb<4){
+    while(a<0x8000000000ul && nmb<4){
         if(svcQueryMemory(&mi,&pi,a)||mi.size==0) break;
         uptr end=mi.addr+mi.size;
         /* only ordinary game heap (type 5), same as the player search; other memory
@@ -341,31 +353,47 @@ static void find_main(void){
                     if(*(u8*)(M+MAIN_VILL+1)>40) continue;
                     if(*(u32*)(M+MAIN_KABU)==0 && *(u32*)(M+MAIN_KABU+4)==0) continue;
                 }
-                int dup=0; for(int j=0;j<s_nmb;j++) if(s_mb[j]==M) dup=1; if(dup) continue;
-                s_mb[s_nmb++]=M;
+                int dup=0; for(int j=0;j<nmb;j++) if(mb[j]==M) dup=1; if(dup) continue;
+                mb[nmb++]=M;
                 const u8* h=(const u8*)M;
-                aden_log("island save %d at %lx, header %02x%02x%02x%02x %02x%02x%02x%02x, turnips buy %u", s_nmb, M, h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7], *(u32*)(M+MAIN_KABU));
-                if(s_nmb>=4) break;
+                aden_log("island save %d at %lx, header %02x%02x%02x%02x %02x%02x%02x%02x, turnips buy %u", nmb, M, h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7], *(u32*)(M+MAIN_KABU));
+                if(nmb>=4) break;
             }
         }
         a=end;
     }
-    aden_log("island search: %d town-id hits, %d saves, %lu ms", hits, s_nmb, (nn_os_GetSystemTick()-t0)/19200);
-    g_island_state = s_nmb ? 2 : 3;
+    aden_log("island search: %d town-id hits, %d saves, %lu ms", hits, nmb, (nn_os_GetSystemTick()-t0)/19200);
+    /* the render thread leaves s_mb alone while we run, so we are its only writer here */
+    int st = nmb ? 2 : 3;
+    if(__atomic_exchange_n(&s_island_stale,0,__ATOMIC_SEQ_CST)){ aden_log("island search obsolete, dropped"); nmb=0; st=0; }
+    for(int i=0;i<nmb;i++) s_mb[i]=mb[i];
+    s_nmb=nmb; __atomic_store_n(&g_island_state,st,__ATOMIC_RELEASE);
 }
-static void island_thread(void* arg){ (void)arg; aden_log("island search started"); find_main(); }
+static void island_thread(void* arg){ (void)arg; aden_log("island search started"); find_main();
+    __atomic_store_n(&s_th2_run,0,__ATOMIC_SEQ_CST); }   /* last store: it publishes s_mb and the state */
 static OsThread s_th2; static u8 s_stack2[0x10000] __attribute__((aligned(0x1000)));
 void aden_island_find(void){
     if(g_island_state==1||g_island_state==2) return;
     if(g_player_state!=2) return;
-    g_island_state=1;
+    /* never wait on a running thread from the render thread: retry on a later frame once it has exited */
+    if(__atomic_load_n(&s_th2_run,__ATOMIC_ACQUIRE)) return;
     if(s_th2_used){ nn_os_WaitThread(&s_th2); nn_os_DestroyThread(&s_th2); s_th2_used=0; }
-    if(nn_os_CreateThread(&s_th2,island_thread,0,s_stack2,sizeof s_stack2,SEARCH_PRIO)){ g_island_state=3; aden_log("could not start island thread"); return; }
+    if(!pers_ok() || !range_rw(s_pb[0],16) || !range_rw(s_pb[0]+PERS_ID,24)){ s_nmb=0; g_island_state=3; return; }
+    memcpy(s_town,(const void*)(s_pb[0]+PERS_ID),24); memcpy(s_ph,(const void*)s_pb[0],16);
+    if(!s_town[0]){ aden_log("no town id"); s_nmb=0; g_island_state=3; return; }
+    __atomic_store_n(&s_island_stale,0,__ATOMIC_SEQ_CST);
+    g_island_state=1;
+    __atomic_store_n(&s_th2_run,1,__ATOMIC_SEQ_CST);
+    if(nn_os_CreateThread(&s_th2,island_thread,0,s_stack2,sizeof s_stack2,SEARCH_PRIO)){
+        __atomic_store_n(&s_th2_run,0,__ATOMIC_SEQ_CST); g_island_state=3; aden_log("could not start island thread"); return; }
     s_th2_used=1;
     nn_os_StartThread(&s_th2);
 }
 int aden_island_ready(void){
-    if(g_island_state!=2 || !aden_player_ready()) return 0;   /* villagers are matched to the personal save */
+    if(__atomic_load_n(&g_island_state,__ATOMIC_ACQUIRE)!=2 || !aden_player_ready()) return 0;   /* villagers are matched to the personal save */
+    /* obsoleted just after the thread checked: search again */
+    if(__atomic_load_n(&s_island_stale,__ATOMIC_SEQ_CST) && !__atomic_load_n(&s_th2_run,__ATOMIC_SEQ_CST)){
+        __atomic_store_n(&s_island_stale,0,__ATOMIC_SEQ_CST); s_nmb=0; g_island_state=0; return 0; }
     int k=0; for(int i=0;i<s_nmb;i++) if(heap_rw(s_mb[i],0x1000) && kabu_ok(s_mb[i]+MAIN_KABU)) s_mb[k++]=s_mb[i];
     s_nmb=k; if(!k) g_island_state=0; return k;
 }
