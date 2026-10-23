@@ -237,9 +237,9 @@ static void tab_items(void){
         if(np){ aden_snprintf(s_status,sizeof s_status,"%s",np); return; }
         int r= s_to_storage ? aden_storage_add(it->id,q,it->stack) : aden_pocket_add(it->id,q,it->stack);
         /* -1 player data not ready, -2 data looks wrong (nothing written) */
-        if(r==-1) aden_snprintf(s_status,sizeof s_status,s_to_storage?"Home storage not found yet - try again in a moment":"Player data not ready yet - try again in a moment");
+        if(r==-1) aden_snprintf(s_status,sizeof s_status,s_to_storage?"Home storage not ready yet - try again in a moment":"Player data not ready yet - try again in a moment");
         else if(r<0) aden_snprintf(s_status,sizeof s_status,s_to_storage?"Home storage looks wrong - nothing was added":"Pockets look wrong - nothing was added");
-        else if(s_to_storage) aden_snprintf(s_status,sizeof s_status,r?"Sent %d x %s to home storage":"Home storage is full",r,it->name);
+        else if(s_to_storage) aden_snprintf(s_status,sizeof s_status,r==0?"Home storage is full":r<q?"Sent %d x %s (home storage now full)":"Sent %d x %s to home storage",r,it->name);
         else if(r==0) aden_snprintf(s_status,sizeof s_status,"Your pockets are full");
         else if(r<q) aden_snprintf(s_status,sizeof s_status,"Added %d x %s (pockets now full)",r,it->name);
         else aden_snprintf(s_status,sizeof s_status,"Added %d x %s to your pockets",r,it->name);
