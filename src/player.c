@@ -12,6 +12,10 @@ static uptr s_copy[MAXCOPIES]; static int s_ncopies;
 #define PERS_ID_PID (0xC248+0x1C)
 #define MAXCAND 48
 #define MAXPLAYERS 8
+/* plain memory we may read: not Locked (0x1), IpcLocked (0x2) or DeviceShared (0x4).
+   Never read GPU-mapped pages: on Eden one CPU read makes reactive flushing copy
+   that buffer back from the GPU every frame for the rest of the session. */
+#define MI_PLAIN(mi) (((mi).attr&7)==0)
 typedef struct { u32 pid; int n; uptr P[MAXCOPIES]; char name[24]; } Player;
 static Player s_players[MAXPLAYERS]; static int s_nplayers, s_active;
 
@@ -68,7 +72,7 @@ static Field s_fields[3]={ {"miles",-0x25590,0,{0}}, {"bank",0x2D5D4,0,{0}}, {"p
 static int addr_rw(uptr a){
     MemoryInfo mi; u32 pi;
     if(svcQueryMemory(&mi,&pi,a)) return 0;
-    return (mi.perm&3)==3 && (mi.attr&1)==0 && mi.type!=0 && a+8<=mi.addr+mi.size;
+    return (mi.perm&3)==3 && MI_PLAIN(mi) && mi.type!=0 && a+8<=mi.addr+mi.size;
 }
 static void find_fields(void){
     for(int f=0;f<3;f++){
@@ -111,8 +115,8 @@ static int base_ok(uptr P){
     /* the personal save around this pocket must be mapped and hold a valid Nook Miles value */
     uptr base=P-PERS_P_; MemoryInfo mi; u32 pi;
     if(base>P) return 0;
-    if(svcQueryMemory(&mi,&pi,base) || (mi.perm&3)!=3 || mi.type==0) return 0;
-    if(svcQueryMemory(&mi,&pi,base+0x74A40-8) || (mi.perm&3)!=3 || mi.type==0) return 0;
+    if(svcQueryMemory(&mi,&pi,base) || (mi.perm&3)!=3 || mi.type==0 || !MI_PLAIN(mi)) return 0;
+    if(svcQueryMemory(&mi,&pi,base+0x74A40-8) || (mi.perm&3)!=3 || mi.type==0 || !MI_PLAIN(mi)) return 0;
     return enc_valid((EncInt*)(base+0x12718));
 }
 static void utf16_name(char* out,int cap,const u16* s){ int k=0; for(int i=0;i<10 && s[i] && k<cap-1;i++) out[k++]= s[i]<128?(char)s[i]:'?'; out[k]=0; }
@@ -128,7 +132,7 @@ static void find_thread(void* arg){
     while(a<0x8000000000ul){
         if(svcQueryMemory(&mi,&pi,a)||mi.size==0) break;
         uptr end=mi.addr+mi.size;
-        if((mi.perm&3)==3 && mi.type==5 && (mi.attr&1)==0 && mi.size>=0x1000){
+        if((mi.perm&3)==3 && mi.type==5 && MI_PLAIN(mi) && mi.size>=0x1000){
             for(uptr P=mi.addr+0x20; P+0xC0<end; P+=8){
                 if(*(u32*)(P-4)!=0xFFFFFFFF || *(u32*)(P-0x18)!=0) continue;
                 if(!sig_ok(P)) continue;
@@ -246,10 +250,10 @@ static uptr s_mb[4]; static int s_nmb;             /* island (main) save bases *
 volatile int g_island_state;                       /* 0 idle, 1 searching, 2 ready, 3 not found */
 
 static int range_chk(uptr a, uptr len, int heap_only){
-    /* every page in [a, a+len) must be mapped read/write (and be game heap if heap_only) */
+    /* every page in [a, a+len) must be plain read/write memory (and game heap if heap_only) */
     uptr e=a+len;
     while(a<e){ MemoryInfo mi; u32 pi; if(svcQueryMemory(&mi,&pi,a) || mi.size==0) return 0;
-        if((mi.perm&3)!=3 || mi.type==0 || (heap_only && mi.type!=5)) return 0; a=mi.addr+mi.size; }
+        if((mi.perm&3)!=3 || mi.type==0 || !MI_PLAIN(mi) || (heap_only && mi.type!=5)) return 0; a=mi.addr+mi.size; }
     return 1;
 }
 static int range_rw(uptr a, uptr len){ return range_chk(a,len,0); }
@@ -281,7 +285,7 @@ static void find_main(void){
         uptr end=mi.addr+mi.size;
         /* only ordinary game heap (type 5), same as the player search; other memory
            (graphics, shared, transfer buffers) can disappear under us */
-        if((mi.perm&3)==3 && mi.type==5 && (mi.attr&1)==0 && mi.size>=0x1000){
+        if((mi.perm&3)==3 && mi.type==5 && MI_PLAIN(mi) && mi.size>=0x1000){
             for(uptr x=mi.addr; x+24<=end; x+=4){
                 if(*(u32*)x!=tid || memcmp((void*)x,town,24)) continue;
                 hits++;
