@@ -175,6 +175,7 @@ static void draw_tabs(void){
 static void tab_items(void){
     if(!s_items_loaded) load_items();
     if(!s_match) refilter();
+    if(g_player_state==0) aden_player_find();   /* spawning needs the player data */
     if(!s_nitems){ text(ROW0,C_WARN,"items.txt not found on SD card"); text(ROW0+1,C_DIM,"put it in sdmc/aden/items.txt"); return; }
     int* cur=&s_cur[TAB_ITEMS]; int* top=&s_top[TAB_ITEMS];
     put(ROW0,0,C_TEXT,"Search: %s%s      (%d found)", s_query, s_typing?"_":"", s_nmatch);
@@ -210,13 +211,17 @@ static void tab_items(void){
     }
     put(ROW0+LIST+3,0,C_TEXT,"Amount: %d     Send to: %s",s_qty,s_to_storage?"home storage":"pockets");
     text(26,C_DIM,"A spawn  X pockets/storage  Y search  ZL/ZR amount");
+    if(g_player_state==1) text(ROW0+LIST+5,C_DIM,"Finding your player data...");
+    if(g_player_state==3){ text(ROW0+LIST+5,C_WARN,"Player data not found - press A to search again");
+        if(pr(B_A)){ s_status[0]=0; aden_player_find(); return; } }   /* A retries instead of spawning */
     if(pr(B_X)) s_to_storage=!s_to_storage;
     if(pr(B_A) && s_nmatch){
         Item* it=&s_items[s_match[*cur]];
         int r= s_to_storage ? aden_storage_add(it->id,s_qty,it->stack) : aden_pocket_add(it->id,s_qty,it->stack);
-        if(s_to_storage && r>0){ aden_snprintf(s_status,sizeof s_status,"Sent %d x %s to home storage",r,it->name); return; }
-        if(s_to_storage && r==0){ aden_snprintf(s_status,sizeof s_status,"Home storage is full"); return; }
-        if(r<0) aden_snprintf(s_status,sizeof s_status,"Still finding your player data - try again in a moment");
+        /* -1 player data not ready, -2 data looks wrong (nothing written) */
+        if(r==-1) aden_snprintf(s_status,sizeof s_status,s_to_storage?"Home storage not found yet - try again in a moment":"Player data not ready yet - try again in a moment");
+        else if(r<0) aden_snprintf(s_status,sizeof s_status,s_to_storage?"Home storage looks wrong - nothing was added":"Pockets look wrong - nothing was added");
+        else if(s_to_storage) aden_snprintf(s_status,sizeof s_status,r?"Sent %d x %s to home storage":"Home storage is full",r,it->name);
         else if(r==0) aden_snprintf(s_status,sizeof s_status,"Your pockets are full");
         else if(r<s_qty) aden_snprintf(s_status,sizeof s_status,"Added %d x %s (pockets now full)",r,it->name);
         else aden_snprintf(s_status,sizeof s_status,"Added %d x %s to your pockets",r,it->name);
@@ -285,7 +290,7 @@ static void tab_player(void){
         if(pr(B_A)){ int n=aden_reactions_learn_all(); aden_snprintf(s_status,sizeof s_status,n<0?"Reactions not found":(n?"Learned %d new reactions":"You already know every reaction"),n); }
     } else {
         text(H,C_DIM,"A fills every empty pocket slot.");
-        if(pr(B_A)){ int n=aden_pocket_add(0x08A4,40,1); aden_snprintf(s_status,sizeof s_status,n>0?"Added %d Bell bags":"Your pockets are full",n); }
+        if(pr(B_A)){ int n=aden_pocket_add(0x08A4,40,1); aden_snprintf(s_status,sizeof s_status,n>0?"Added %d Bell bags":n==0?"Your pockets are full":n==-1?"Player data not ready yet - try again in a moment":"Pockets look wrong - nothing was added",n); }
     }
 }
 static void tab_island(void){
@@ -407,7 +412,7 @@ void aden_menu_draw(void){
     extern volatile int g_aden_open_request;
     if(g_aden_open_request && !g_menu_open){ g_menu_open=1; s_armed=0; }
     if(!g_menu_open){ s_was_open=0; return; }
-    if(!s_was_open){ s_was_open=1; aden_log("menu opened"); if(g_player_state==0) aden_player_find(); }
+    if(!s_was_open){ s_was_open=1; aden_log("menu opened"); }
     poll();
     /* ignore input until every button from the phone tap has been released */
     if(!s_armed){ if(s_now==0) s_armed=1; s_press=0; }
