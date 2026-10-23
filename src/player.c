@@ -49,14 +49,6 @@ static void log_encs(uptr P, uptr lo, uptr hi){
     for(;a<b && n<60;a+=4){ EncInt* v=(EncInt*)a; if(!enc_valid(v)) continue; u32 x=enc_get(v); if(x>99999999u) continue;
         n++; s64 d=(s64)(a-P); aden_log("  enc %s%lx = %u", d<0?"-":"+", d<0?-d:d, x); }
 }
-/* Build 15 wrongly wrote into unused player slots (empty pockets, 0 Bells). Undo that:
-   a slot whose 20 pocket entries are all 99k-Bell bags (08A4, param 0) is put back to empty / 0 Bells. */
-static void repair_unused(uptr P){
-    for(int i=0;i<20;i++){ uptr s=P+i*8; if(*(u16*)s!=0x08A4 || *(u16*)(s+2) || *(u32*)(s+4)) return; }
-    for(int i=0;i<20;i++){ uptr s=P+i*8; *(u32*)(s+4)=0; *(u16*)(s+2)=0; *(u16*)s=0xFFFE; }
-    enc_set((EncInt*)(P+0xB8),0);
-    aden_log("repaired unused player slot at %lx", P);
-}
 static int has_stuff(uptr P){
     if(enc_get((EncInt*)(P+0xB8))) return 1;
     for(int i=0;i<20;i++) if(*(u16*)(P+i*8)!=0xFFFE) return 1;
@@ -137,7 +129,6 @@ static void find_thread(void* arg){
             for(uptr P=mi.addr+0x20; P+0xC0<end; P+=8){
                 if(*(u32*)(P-4)!=0xFFFFFFFF || *(u32*)(P-0x18)!=0) continue;
                 if(!sig_ok(P)) continue;
-                repair_unused(P);
                 if(base_ok(P)){
                     u32 pid=*(u32*)(P-PERS_P_+PERS_ID_PID);
                     u16 c0=*(u16*)(P-PERS_P_+PERS_ID_PID+4);
