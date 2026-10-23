@@ -1,8 +1,9 @@
 #include "nn.h"
 /* Player data (ACNH 3.0.2). Layout found by memory analysis:
-     P-0xB8 : pocket 2, 20 slots (used when the bag is upgraded)
+     P-0xB8 : pocket 2, 20 slots (only the first size-20 are unlocked by the bag upgrades)
      P      : pocket 1, 20 slots of { u16 id; u8 sys; u8 add; u32 param }  (empty id = 0xFFFE)
-     P+0xA0 : u32 pocket size (20 or 40), then 5 x 0xFFFFFFFF
+     P+0xA0 : u32 pocket size (20, 30 or 40), then 5 x 0xFFFFFFFF
+              slots 0-19 are at P, slots 20..size-1 at P-0xB8
      P+0xB8 : wallet Bells as EncryptedInt32 { u32 enc; u16 adjust; u8 shift; u8 checksum }
    The game keeps several copies (live + save buffers); we update all of them. */
 #define MAXCOPIES 6
@@ -39,7 +40,7 @@ static int slot_ok(const u8* p){
 static int sig_ok(uptr P){
     if(*(u32*)(P-0x18)!=0) return 0;
     for(int i=0;i<5;i++) if(*(u32*)(P-0x14+i*4)!=0xFFFFFFFF || *(u32*)(P+0xA4+i*4)!=0xFFFFFFFF) return 0;
-    u32 n=*(u32*)(P+0xA0); if(n!=20 && n!=40) return 0;
+    u32 n=*(u32*)(P+0xA0); if(n!=20 && n!=30 && n!=40) return 0;
     for(int i=0;i<20;i++) if(!slot_ok((u8*)(P+i*8))) return 0;
     return enc_valid((EncInt*)(P+0xB8));
 }
@@ -203,6 +204,8 @@ void aden_wallet_set(u32 v){
 int aden_pocket_add(u16 id, int qty, int stack){
     if(!aden_player_ready()) return -1;
     uptr P=s_copy[0]; u32 size=*(u32*)(P+0xA0);
+    /* a copy may still hold the size from before an upgrade: never fill a slot locked in any copy */
+    for(int c=1;c<s_ncopies;c++){ u32 z=*(u32*)(s_copy[c]+0xA0); if(z<size) size=z; }
     int placed=0;
     while(qty>0){
         int slot=-1;
