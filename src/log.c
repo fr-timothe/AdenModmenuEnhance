@@ -18,6 +18,16 @@ static void sd_write(const char* s, u32 n){
     FsFile f; if(nn_fs_OpenFile(&f, LOG_PATH, FS_WRITE|FS_APPEND)) return;
     FsWriteOption o={1}; nn_fs_WriteFile(f, s_off, s, n, &o); s_off+=n; nn_fs_CloseFile(f);
 }
+/* Lock held, !s_busy, s_len>0: swap buffers and write the old one outside the lock. */
+static void drain(u64 t){
+    const char* p=s_buf[s_cur]; u32 len=s_len;
+    s_busy=1; s_cur^=1; s_len=0; s_last=t; unlock();
+    sd_write(p,len);                               /* only the s_busy owner touches s_off and p */
+    lock(); s_busy=0;
+}
+HIDDEN void aden_log_flush(void){
+    lock(); if(s_sd && !s_busy && s_len) drain(nn_os_GetSystemTick()); unlock();
+}
 HIDDEN int aden_sd_ready(void){ return s_sd; }
 HIDDEN void aden_log_attach_sd(void){
     if(s_sd) return;
@@ -43,12 +53,7 @@ HIDDEN void aden_log(const char* fmt, ...){
         if(!s_sd){ if(s_early_len+n<sizeof s_early){ memcpy(s_early+s_early_len,b,n); s_early_len+=n; } unlock(); return; }
         if(s_len+n<=sizeof s_buf[0]){ memcpy(s_buf[s_cur]+s_len,b,n); s_len+=n; n=0; }
         u64 t=nn_os_GetSystemTick();
-        if(!s_busy && s_len && (n || s_len>=LOG_BATCH || t-s_last>=LOG_IDLE)){
-            const char* p=s_buf[s_cur]; u32 len=s_len;
-            s_busy=1; s_cur^=1; s_len=0; s_last=t; unlock();
-            sd_write(p,len);                       /* only the s_busy owner touches s_off and p */
-            lock(); s_busy=0;
-        }
+        if(!s_busy && s_len && (n || s_len>=LOG_BATCH || t-s_last>=LOG_IDLE)) drain(t);
         unlock();
         if(!n) return;
         nn_os_SleepThread(1000000);                /* full while another thread writes: wait, never drop */
