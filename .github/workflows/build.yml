@@ -1,0 +1,57 @@
+# Builds out/subsdk9 with clang/ld.lld and elf2nso, uploads it as an artifact.
+name: build
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # switch-tools commit to build elf2nso from; bump to update (also busts the cache)
+  SWITCH_TOOLS_REF: 22756068dd0ed6ff9734c59cb4f99ebd3f62555b
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld liblz4-dev zlib1g-dev pkg-config autoconf automake
+          clang --version
+          ld.lld --version
+
+      - name: Cache elf2nso
+        id: elf2nso-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/elf2nso
+          key: elf2nso-${{ runner.os }}-${{ env.SWITCH_TOOLS_REF }}
+
+      - name: Build elf2nso
+        if: steps.elf2nso-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/switchbrew/switch-tools.git "$RUNNER_TEMP/switch-tools"
+          cd "$RUNNER_TEMP/switch-tools"
+          git checkout --detach "$SWITCH_TOOLS_REF"
+          ./autogen.sh
+          ./configure
+          make elf2nso
+          mkdir -p ~/elf2nso
+          cp elf2nso ~/elf2nso/
+
+      - name: Build subsdk9
+        run: ELF2NSO=~/elf2nso/elf2nso ./build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: subsdk9
+          path: out/subsdk9
+          if-no-files-found: error
