@@ -212,8 +212,12 @@ static void tab_items(void){
         if(sel) s_hl_row=ROW0+2+i;
     }
     put(ROW0+LIST+3,0,C_TEXT,"Amount: %d     Send to: %s",s_qty,s_to_storage?"home storage":"pockets");
-    text(26,C_DIM,"A spawn  X pockets/storage  Y search  ZL/ZR amount");
-    if(g_player_state==1) text(ROW0+LIST+5,C_DIM,"Finding your player data...");
+    text(26,C_DIM,"A spawn  X pockets/storage  Y search  ZL/ZR amount  - rescan");
+    /* who receives spawned items; Minus redoes the player search (not while the island thread reads the copies) */
+    if(pr(B_MINUS) && g_player_state!=1 && g_island_state!=1){ s_status[0]=0; g_player_state=0; g_island_state=0; aden_player_find(); }
+    if(g_player_state==2){ const char* nm=aden_player_name(aden_player_active());
+        put(ROW0+LIST+5,0,C_DIM,"Items go to: %s   (%d copies%s)",nm[0]?nm:"your character",aden_player_copies(),aden_player_count()>1?", change in Player tab":""); }
+    if(g_player_state<2) text(ROW0+LIST+5,C_DIM,"Finding your player data...");
     if(g_player_state==3){ text(ROW0+LIST+5,C_WARN,"Player data not found - press A to search again");
         if(pr(B_A)){ s_status[0]=0; aden_player_find(); return; } }   /* A retries instead of spawning */
     if(pr(B_X)) s_to_storage=!s_to_storage;
