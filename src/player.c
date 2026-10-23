@@ -33,6 +33,7 @@ typedef struct { u32 pid; int n; uptr P[MAXCOPIES]; char name[24]; } Player;
 static Player s_players[MAXPLAYERS]; static int s_nplayers, s_active;
 
 volatile int g_player_state;   /* 0 idle, 1 searching, 2 ready, 3 not found */
+volatile int g_island_state;   /* 0 idle, 1 searching, 2 ready, 3 not found */
 static OsThread s_th; static u8 s_stack[0x8000] __attribute__((aligned(0x1000)));
 void aden_item_bitmap(u8* bits);
 static u8 s_valid[0x10000/8];
@@ -103,7 +104,7 @@ static int field_live(int f){
     for(int i=0;i<F->n;i++) if(addr_rw(F->a[i]) && enc_valid((EncInt*)F->a[i])) F->a[k++]=F->a[i];
     F->n=k; return k;
 }
-int aden_stat_ok(int f){ return f>=0 && f<3 && s_fields[f].n>0; }
+int aden_stat_ok(int f){ return g_player_state==2 && f>=0 && f<3 && s_fields[f].n>0; }
 u32 aden_stat_get(int f){ return aden_stat_ok(f) ? enc_get((EncInt*)s_fields[f].a[0]) : 0; }
 void aden_stat_set(int f,u32 v){
     if(!aden_stat_ok(f) || !field_live(f)) return;
@@ -125,8 +126,9 @@ static int base_ok(uptr P){
     return enc_valid((EncInt*)(base+0x12718));
 }
 static void utf16_name(char* out,int cap,const u16* s){ int k=0; for(int i=0;i<10 && s[i] && k<cap-1;i++) out[k++]= s[i]<128?(char)s[i]:'?'; out[k]=0; }
+static int s_bad;   /* consecutive checks that found a bad copy */
 static void use_player(int i){
-    s_active=i; s_ncopies=0;
+    s_active=i; s_ncopies=0; s_bad=0;
     for(int k=0;k<s_players[i].n && k<MAXCOPIES;k++) s_copy[s_ncopies++]=s_players[i].P[k];
     find_fields(); find_personal_bases();
 }
@@ -177,7 +179,7 @@ const char* aden_player_name(int i){ return (i>=0 && i<s_nplayers) ? s_players[i
 void aden_player_select(int i){
     if(g_player_state!=2 || i<0 || i>=s_nplayers || i==s_active) return;
     use_player(i);
-    extern volatile int g_island_state; g_island_state=0;   /* friendship is per player */
+    g_island_state=0;   /* friendship is per player */
     aden_log("switched to player %s (%d copies)", s_players[i].name, s_ncopies);
 }
 static int s_th_used, s_th2_used;
@@ -191,10 +193,22 @@ void aden_player_find(void){
     s_th_used=1;
     nn_os_StartThread(&s_th);
 }
-/* re-check cached copies (memory can move after loading screens) */
+/* re-check cached copies (memory can move after loading screens). One bad copy means the
+   others may be old save buffers too: stop writing at once and, if it lasts (not just a
+   write caught half-way), drop everything derived from the copies and search again. */
+static uptr s_pb[MAXF]; static int s_npb;          /* personal save bases */
+static uptr s_mb[4]; static int s_nmb;             /* island (main) save bases */
+#define STALE_CHECKS 8
 static int still_ok(void){
-    int k=0; for(int i=0;i<s_ncopies;i++) if(sig_ok(s_copy[i])) s_copy[k++]=s_copy[i];
-    s_ncopies=k; if(!k) g_player_state=0; return k;
+    for(int i=0;i<s_ncopies;i++) if(!sig_ok(s_copy[i])){
+        if(++s_bad<STALE_CHECKS) return 0;
+        aden_log("player copy %d at %lx went stale, searching again", i, s_copy[i]);
+        s_ncopies=0; s_npb=0; s_bad=0; for(int f=0;f<3;f++) s_fields[f].n=0;
+        if(g_island_state!=1){ s_nmb=0; g_island_state=0; }   /* a running island search keeps its result */
+        g_player_state=0;
+        return 0;
+    }
+    s_bad=0; return s_ncopies;
 }
 int aden_player_ready(void){ return g_player_state==2 && still_ok(); }
 int aden_player_copies(void){ return s_ncopies; }
@@ -252,9 +266,7 @@ extern const u8 g_reactions[]; extern const int g_nreactions;
 typedef struct{u8 sp,var;const char* name;} VName;
 extern const VName g_vnames[]; extern const int g_nvnames;
 
-static uptr s_pb[MAXF]; static int s_npb;          /* personal save bases */
-static uptr s_mb[4]; static int s_nmb;             /* island (main) save bases */
-volatile int g_island_state;                       /* 0 idle, 1 searching, 2 ready, 3 not found */
+static int pers_ok(void){ return g_player_state==2 && s_npb; }   /* personal bases only hold while the player data is ready */
 
 static int range_chk(uptr a, uptr len, int heap_only){
     /* every page in [a, a+len) must be plain read/write memory (and game heap if heap_only) */
@@ -334,7 +346,7 @@ void aden_island_find(void){
     nn_os_StartThread(&s_th2);
 }
 int aden_island_ready(void){
-    if(g_island_state!=2) return 0;
+    if(g_island_state!=2 || !aden_player_ready()) return 0;   /* villagers are matched to the personal save */
     int k=0; for(int i=0;i<s_nmb;i++) if(heap_rw(s_mb[i],0x1000) && kabu_ok(s_mb[i]+MAIN_KABU)) s_mb[k++]=s_mb[i];
     s_nmb=k; if(!k) g_island_state=0; return k;
 }
@@ -345,7 +357,7 @@ static void utf16_ascii(char* out,int cap,const u16* s,int n){
     out[k]=0;
 }
 void aden_player_names(char* player,char* town,int cap){
-    player[0]=town[0]=0; if(!s_npb) return;
+    player[0]=town[0]=0; if(!pers_ok()) return;
     uptr id=s_pb[0]+PERS_ID;
     utf16_ascii(town,cap,(const u16*)(id+4),10);
     utf16_ascii(player,cap,(const u16*)(id+0x20),10);
@@ -353,7 +365,7 @@ void aden_player_names(char* player,char* town,int cap){
 
 /* ---- recipes ---- */
 int aden_recipes_learn_all(void){
-    if(!s_npb) return -1;
+    if(!pers_ok()) return -1;
     int learned=0;
     for(int c=0;c<s_npb;c++){
         u8* R=(u8*)(s_pb[c]+PERS_RECIPES);
@@ -370,7 +382,7 @@ int aden_recipes_learn_all(void){
     return learned;
 }
 int aden_recipes_known(void){
-    if(!s_npb) return 0; const u8* R=(const u8*)(s_pb[0]+PERS_RECIPES); int n=0;
+    if(!pers_ok()) return 0; const u8* R=(const u8*)(s_pb[0]+PERS_RECIPES); int n=0;
     for(int i=0;i<0x800;i++) if((R[i>>3]>>(i&7)&1) && (g_recipe_valid[i>>3]>>(i&7)&1)) n++;
     return n;
 }
@@ -378,7 +390,7 @@ int aden_recipes_total(void){ return g_nrecipes; }
 
 /* ---- reactions ---- */
 int aden_reactions_learn_all(void){
-    if(!s_npb) return -1;
+    if(!pers_ok()) return -1;
     int added=0;
     for(int c=0;c<s_npb;c++){
         u8* M=(u8*)(s_pb[c]+PERS_MANPU);
@@ -397,14 +409,14 @@ int aden_reactions_learn_all(void){
     return added;
 }
 int aden_reactions_known(void){
-    if(!s_npb) return 0; const u8* M=(const u8*)(s_pb[0]+PERS_MANPU); int n=0;
+    if(!pers_ok()) return 0; const u8* M=(const u8*)(s_pb[0]+PERS_MANPU); int n=0;
     for(int i=0;i<256;i++) if(M[i] && M[i]<=120) n++;
     return n;
 }
 
 /* ---- home storage ---- */
 int aden_storage_add(u16 id,int qty,int stack){
-    if(!s_npb) return -1;
+    if(!aden_player_ready() || !s_npb) return -1;   /* also catches stale copies before writing */
     uptr S0=s_pb[0]+PERS_CHEST; int placed=0, slot=0;
     for(int i=0;i<64;i++) if(!slot_ok((u8*)(S0+i*8))){ aden_log("storage looks wrong, not touching it"); return -1; }
     while(qty>0){
@@ -421,7 +433,7 @@ int aden_storage_add(u16 id,int qty,int stack){
     return placed;
 }
 int aden_storage_free(void){
-    if(!s_npb) return 0; uptr S0=s_pb[0]+PERS_CHEST; int n=0;
+    if(!pers_ok()) return 0; uptr S0=s_pb[0]+PERS_CHEST; int n=0;
     for(int i=0;i<CHEST_N;i++) if(*(u16*)(S0+i*8)==0xFFFE) n++;
     return n;
 }
@@ -438,7 +450,7 @@ void aden_turnip_set(int sell,u32 v){
 /* ---- villagers ---- */
 static uptr vill(int c,int k){ return s_mb[c]+MAIN_VILL+(uptr)k*VILL_SIZE; }
 static int my_mem(uptr V){
-    if(!s_npb) return -1; u32 me=*(u32*)(s_pb[0]+PERS_ID+0x1C);
+    if(!pers_ok()) return -1; u32 me=*(u32*)(s_pb[0]+PERS_ID+0x1C);
     for(int j=0;j<8;j++) if(*(u32*)(V+4+j*MEM_SIZE+0x1C)==me) return j;
     return -1;
 }
