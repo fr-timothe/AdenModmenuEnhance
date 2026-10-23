@@ -165,6 +165,7 @@ static char s_status[96];
 static int s_was_open, s_armed;
 #define ROW0 0
 #define LIST 18
+#define MODLIST 17   /* mod rows that fit above the message line */
 
 static void draw_tabs(void){
     char b[72]; int n=0;
@@ -339,19 +340,20 @@ static void tab_island(void){
 }
 static void tab_mods(void){
     if(!s_mods_scanned) scan_mods();
-    int* cur=&s_cur[TAB_MODS];
+    int* cur=&s_cur[TAB_MODS]; int* top=&s_top[TAB_MODS];
     text(ROW0,C_TEXT,"Mod manager");
     text(ROW0+1,C_DIM,"Mods go in sdmc/aden/mods/<name>/romfs/...");
     text(ROW0+2,C_DIM,"A turns a mod on/off. Applies when the game restarts.");
     if(s_nmods==0){ text(ROW0+4,C_TEXT,"No mods yet. Copy a romfs mod folder into"); text(ROW0+5,C_TEXT,"sdmc/aden/mods, then reopen this tab."); }
     if(up()&&*cur>0)(*cur)--; if(down()&&*cur<s_nmods-1)(*cur)++;
-    for(int i=0;i<s_nmods && i<17;i++){
-        Mod* m=&s_mods[i];
+    if(*cur<*top) *top=*cur; if(*cur>=*top+MODLIST) *top=*cur-MODLIST+1;
+    for(int i=0;i<MODLIST && *top+i<s_nmods;i++){
+        Mod* m=&s_mods[*top+i];
         const char* kind = m->romfs ? (m->exefs?"romfs only":"") : (m->exefs?"code mod: use Eden":"no romfs folder");
         put(ROW0+4+i,0,C_TEXT,"[%s] %s",m->on?"ON ":"off",m->name);
         if(m->on!=m->on_at_start) put(ROW0+4+i,1,C_WARN,"restart needed");
         else if(kind[0]) put(ROW0+4+i,1,C_DIM,"%s",kind);
-        if(i==*cur) s_hl_row=ROW0+4+i;
+        if(*top+i==*cur) s_hl_row=ROW0+4+i;
     }
     if(pr(B_A) && s_nmods){
         Mod* m=&s_mods[*cur];
@@ -361,7 +363,8 @@ static void tab_mods(void){
             aden_snprintf(s_modmsg,sizeof s_modmsg,"%s is now %s - restart the game to apply",m->name,m->on?"ON":"off");
         }
     }
-    if(pr(B_Y)){ scan_mods(); aden_snprintf(s_modmsg,sizeof s_modmsg,"%d mods found",s_nmods); }
+    if(pr(B_Y)){ scan_mods(); if(*cur>s_nmods-1) *cur=s_nmods>0?s_nmods-1:0; if(*top>*cur) *top=*cur;   /* the list may have shrunk */
+        aden_snprintf(s_modmsg,sizeof s_modmsg,"%d mods found",s_nmods); }
     text(26,C_DIM,"A on/off   Y rescan folder   B close");
     if(s_modmsg[0]) text(ROW0+22,C_DIM,s_modmsg);
 }
