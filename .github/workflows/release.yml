@@ -52,6 +52,9 @@ jobs:
           root="$RUNNER_TEMP/pkg"
           mkdir -p "$root/load/$TITLE_ID/AdenModmenu/exefs" "$root/sdmc/aden/mods"
           cp out/subsdk9 "$root/load/$TITLE_ID/AdenModmenu/exefs/"
+          printf "Put romfs mods here: sdmc/aden/mods/<name>/romfs/...
+Turn them on or off in the Mods tab.
+" > "$root/sdmc/aden/mods/README.txt"
           cd "$root" && zip -r "$GITHUB_WORKSPACE/AdenModmenu-$GITHUB_REF_NAME.zip" load sdmc
 
       - name: Upload to the release

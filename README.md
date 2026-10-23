@@ -24,7 +24,7 @@ Each GitHub release has an `AdenModmenu-<version>.zip` with two folders: `load/`
 2. Drag the `load` and `sdmc` folders from the zip into the Eden user folder. Merge them with the existing folders when asked.
 3. Start the game.
 
-The zip puts the mod in `load/01006F8002326000/AdenModmenu/exefs/` and creates `sdmc/aden/mods/`. To check, right-click Animal Crossing in Eden and choose **Open Mod Data Location**: `AdenModmenu` must be listed.
+The zip puts the mod in `load/01006F8002326000/AdenModmenu/exefs/` and creates `sdmc/aden/mods/` (where romfs mods go). To check, right-click Animal Crossing in Eden and choose **Open Mod Data Location**: `AdenModmenu` must be listed.
 
 If Aden Modmenu is already installed from GameBanana under another folder name, do not add a second copy. Copy only the new `subsdk9` into that folder's `exefs`, replacing the old one.
 
