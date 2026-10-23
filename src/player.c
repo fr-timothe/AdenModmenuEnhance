@@ -5,8 +5,10 @@
      P+0xA0 : u32 pocket size (20, 30 or 40), then 5 x 0xFFFFFFFF
               slots 0-19 are at P, slots 20..size-1 at P-0xB8
      P+0xB8 : wallet Bells as EncryptedInt32 { u32 enc; u16 adjust; u8 shift; u8 checksum }
-   The game keeps several copies (live + save buffers); we update all of them. */
-#define MAXCOPIES 6
+   The game keeps several copies (live + save buffers); we update all of them.
+   Copies are kept in address order, so the cap must stay well above what the game makes:
+   a dropped copy may be the live one. */
+#define MAXCOPIES 16
 #define MAXSEEN 24
 static uptr s_copy[MAXCOPIES]; static int s_ncopies;
 #define PERS_P_     0x37CA8
@@ -29,7 +31,7 @@ static int scan_nap(uptr a, uptr* end){
     if(mi.addr+mi.size<*end) *end=mi.addr+mi.size;   /* region split: stop at its new end, the caller resumes there */
     return 1;
 }
-typedef struct { u32 pid; int n; uptr P[MAXCOPIES]; char name[24]; } Player;
+typedef struct { u32 pid; int n, drop; uptr P[MAXCOPIES]; char name[24]; } Player;
 static Player s_players[MAXPLAYERS]; static int s_nplayers, s_active;
 
 volatile int g_player_state;   /* 0 idle, 1 searching, 2 ready, 3 not found */
@@ -72,7 +74,7 @@ static int has_stuff(uptr P){
    Nook Miles: P-0x25590 (49,430 in the test save).   Bank: P+0x2D5D4 (300,150).
    Only candidates that are mapped RW, pass the checksum and agree on one value are kept. */
 #define STRIDE 0x74A60
-#define MAXF 8
+#define MAXF (2*MAXCOPIES)   /* two offsets per copy */
 typedef struct { const char* name; s64 off; int n; uptr a[MAXF]; } Field;
 static Field s_fields[3]={ {"miles",-0x25590,0,{0}}, {"bank",0x2D5D4,0,{0}}, {"poki",0x3C608,0,{0}} };
 static int addr_rw(uptr a){
@@ -149,10 +151,11 @@ static void find_thread(void* arg){
                     u16 c0=*(u16*)(P-PERS_P_+PERS_ID_PID+4);
                     if(!pid || !c0){ empty++; continue; }     /* unused resident slot (no id / no name) */
                     int g=-1; for(int j=0;j<s_nplayers;j++) if(s_players[j].pid==pid) g=j;
-                    if(g<0 && s_nplayers<MAXPLAYERS){ g=s_nplayers++; s_players[g].pid=pid; s_players[g].n=0;
+                    if(g<0 && s_nplayers<MAXPLAYERS){ g=s_nplayers++; s_players[g].pid=pid; s_players[g].n=0; s_players[g].drop=0;
                         utf16_name(s_players[g].name,sizeof s_players[g].name,(const u16*)(P-PERS_P_+PERS_ID_PID+4)); }
                     if(g>=0 && s_players[g].n<MAXCOPIES){ s_players[g].P[s_players[g].n++]=P;
                         aden_log("player %s (id %x) copy at %lx, wallet %u", s_players[g].name, pid, P, enc_get((EncInt*)(P+0xB8))); }
+                    else if(g>=0){ s_players[g].drop++; aden_log("player %s copy at %lx dropped: %d-copy cap", s_players[g].name, P, MAXCOPIES); }
                 } else if(s_ncand<MAXCAND) s_cand[s_ncand++]=P;   /* pocket found but layout unknown (kept for fallback only) */
             }
         }
@@ -160,14 +163,19 @@ static void find_thread(void* arg){
     }
     aden_log("search: %d players, %d empty slots, %d other pocket matches, %lu ms", s_nplayers, empty, s_ncand, (nn_os_GetSystemTick()-t0)/19200);
     if(s_nplayers){
-        /* default to the player with the most copies in memory: that is the one being played */
-        int best=0; for(int j=1;j<s_nplayers;j++) if(s_players[j].n>s_players[best].n) best=j;
+        /* default to the player with the most copies in memory: that is the one being played.
+           A tie goes to the lowest PlayerID, so the guess does not depend on where memory landed. */
+        int best=0, tie=0;
+        for(int j=0;j<s_nplayers;j++){ const Player *p=&s_players[j], *b=&s_players[best];
+            aden_log("player %s (id %x): %d copies, %d dropped", p->name, p->pid, p->n, p->drop);
+            if(p->n>b->n || (p->n==b->n && p->pid<b->pid)) best=j; }
+        for(int j=0;j<s_nplayers;j++) if(j!=best && s_players[j].n==s_players[best].n) tie++;
         use_player(best);
-        aden_log("editing player %s (%d copies)", s_players[best].name, s_ncopies);
+        aden_log("editing player %s (%d copies)%s", s_players[best].name, s_ncopies, tie?", tied on copies: lowest id picked, use the resident picker to switch":"");
     } else {
         /* fallback: old behaviour, any pocket that has something in it */
         for(int i=0;i<s_ncand && s_ncopies<MAXCOPIES;i++) if(has_stuff(s_cand[i])) s_copy[s_ncopies++]=s_cand[i];
-        aden_log("fallback: %d pocket copies", s_ncopies);
+        aden_log("fallback: %d pocket copies from %d matches (cap %d)", s_ncopies, s_ncand, MAXCOPIES);
         find_fields(); find_personal_bases();
     }
     g_player_state = s_ncopies ? 2 : 3;
@@ -283,7 +291,7 @@ static void find_personal_bases(void){
         uptr b=s_fields[0].a[i]-PERS_MILES;
         if(range_rw(b,PERS_SIZE)) s_pb[s_npb++]=b;
     }
-    if(!s_npb) for(int i=0;i<s_ncopies;i++){ uptr b=s_copy[i]-PERS_P; if(range_rw(b,PERS_SIZE)) s_pb[s_npb++]=b; }
+    if(!s_npb) for(int i=0;i<s_ncopies && s_npb<MAXF;i++){ uptr b=s_copy[i]-PERS_P; if(range_rw(b,PERS_SIZE)) s_pb[s_npb++]=b; }
     aden_log("personal saves: %d", s_npb);
 }
 static int kabu_ok(uptr k){
