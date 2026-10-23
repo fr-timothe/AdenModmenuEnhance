@@ -1,0 +1,67 @@
+# On a v* tag: builds subsdk9 and uploads AdenModmenu-<tag>.zip (drag-and-drop load/ and sdmc/ folders) to the release.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  # switch-tools commit to build elf2nso from; keep in sync with build.yml
+  SWITCH_TOOLS_REF: 22756068dd0ed6ff9734c59cb4f99ebd3f62555b
+  TITLE_ID: 01006F8002326000
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld liblz4-dev zlib1g-dev pkg-config autoconf automake zip
+
+      - name: Cache elf2nso
+        id: elf2nso-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/elf2nso
+          key: elf2nso-${{ runner.os }}-${{ env.SWITCH_TOOLS_REF }}
+
+      - name: Build elf2nso
+        if: steps.elf2nso-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/switchbrew/switch-tools.git "$RUNNER_TEMP/switch-tools"
+          cd "$RUNNER_TEMP/switch-tools"
+          git checkout --detach "$SWITCH_TOOLS_REF"
+          ./autogen.sh
+          ./configure
+          make elf2nso
+          mkdir -p ~/elf2nso
+          cp elf2nso ~/elf2nso/
+
+      - name: Build subsdk9
+        run: ELF2NSO=~/elf2nso/elf2nso ./build.sh
+
+      - name: Make the zip
+        run: |
+          root="$RUNNER_TEMP/pkg"
+          mkdir -p "$root/load/$TITLE_ID/AdenModmenu/exefs" "$root/sdmc/aden/mods"
+          cp out/subsdk9 "$root/load/$TITLE_ID/AdenModmenu/exefs/"
+          cd "$root" && zip -r "$GITHUB_WORKSPACE/AdenModmenu-$GITHUB_REF_NAME.zip" load sdmc
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          zip="AdenModmenu-$GITHUB_REF_NAME.zip"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$zip" --clobber
+          else
+            pre=; case "$GITHUB_REF_NAME" in *-*) pre=--prerelease;; esac
+            gh release create "$GITHUB_REF_NAME" "$zip" $pre --title "Aden Modmenu $GITHUB_REF_NAME" --notes "See README.md, section Install on Eden."
+          fi
