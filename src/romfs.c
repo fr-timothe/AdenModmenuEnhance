@@ -9,7 +9,7 @@
 #define NBUCKET 4096
 #define MAXFILES 20000
 typedef struct Ent { struct Ent* next; u32 hash; const char* rel; const char* src; } Ent;
-static Ent* s_bucket[NBUCKET]; static int s_nfiles; static volatile int s_state; /* 0 none, 1 building, 2 ready */
+static Ent* s_bucket[NBUCKET]; static int s_nfiles; static int s_state; /* atomic: 0 none, 1 building, 2 ready */
 static char* s_arena; static u32 s_arena_left;
 
 static u32 fnv(const char* s){ u32 h=2166136261u; for(;*s;s++){ char c=*s; if(c>='A'&&c<='Z') c+=32; h=(h^(u8)c)*16777619u; } return h; }
@@ -98,7 +98,7 @@ HIDDEN void aden_mod_set(const char* name,int on){
 }
 HIDDEN int aden_romfs_active(const char* name){
     /* was this mod loaded at start-up? */
-    (void)name; return s_state==2;
+    (void)name; return __atomic_load_n(&s_state,__ATOMIC_ACQUIRE)==2;
 }
 
 static void build(void){
@@ -117,9 +117,15 @@ static void build(void){
 
 static Result (*o_open)(FsFile*, const char*, int);
 static Result h_open(FsFile* f, const char* path, int mode){
-    if(path && s_state!=1 && memcmp(path,"content:/",9)==0){
-        if(s_state==0 && aden_sd_ready()){ s_state=1; build(); s_state=2; }
-        if(s_state==2 && s_nfiles){
+    if(path && memcmp(path,"content:/",9)==0){
+        int st=__atomic_load_n(&s_state,__ATOMIC_ACQUIRE);   /* acquire: a 2 makes the built table visible */
+        if(st==0 && aden_sd_ready()){
+            /* one thread claims 0 -> 1 and builds; the others see 1 and use the game's file */
+            int z=0;
+            if(__atomic_compare_exchange_n(&s_state,&z,1,0,__ATOMIC_ACQUIRE,__ATOMIC_ACQUIRE)){ build(); __atomic_store_n(&s_state,2,__ATOMIC_RELEASE); st=2; }
+            else st=z;
+        }
+        if(st==2 && s_nfiles){
             Ent* e=find(path+9);
             if(e){
                 Result r=o_open(f,e->src,mode);
