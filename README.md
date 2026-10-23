@@ -16,6 +16,20 @@ game with no PC tools needed.
 
 Downloads and install instructions are on the GameBanana page.
 
+## Install on Eden
+
+Each GitHub release has an `AdenModmenu-<version>.zip` with two folders: `load/` and `sdmc/`.
+
+1. Open the Eden user folder: in Eden, **File > Open Eden Folder**. It is usually `%APPDATA%\eden`. A portable Eden uses the `user` folder next to `eden.exe`. The `load` and `sdmc` folders are in there.
+2. Drag the `load` and `sdmc` folders from the zip into the Eden user folder. Merge them with the existing folders when asked.
+3. Start the game.
+
+The zip puts the mod in `load/01006F8002326000/AdenModmenu/exefs/` and creates `sdmc/aden/mods/` (where romfs mods go). To check, right-click Animal Crossing in Eden and choose **Open Mod Data Location**: `AdenModmenu` must be listed.
+
+If Aden Modmenu is already installed from GameBanana under another folder name, do not add a second copy. Copy only the new `subsdk9` into that folder's `exefs`, replacing the old one.
+
+The zip has no game files. The SD files from the GameBanana package stay as they are: `items.txt`, plus the phone app name and icon in `sdmc/aden/romfs`. You can also make them from your own dump (see Building).
+
 ## How it works
 
 The mod is a `subsdk9` module loaded next to the game. At start-up it:
