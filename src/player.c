@@ -17,6 +17,18 @@ static uptr s_copy[MAXCOPIES]; static int s_ncopies;
    Never read GPU-mapped pages: on Eden one CPU read makes reactive flushing copy
    that buffer back from the GPU every frame for the rest of the session. */
 #define MI_PLAIN(mi) (((mi).attr&7)==0)
+/* searches share the CPU with the game: nap at every SCAN_CHUNK boundary (~1.6 s of naps per 4 GB),
+   then re-check the region, since the game may remap memory while we sleep */
+#define SCAN_CHUNK  0x40000
+#define SCAN_NAP    100000     /* ns */
+#define SEARCH_PRIO 24         /* below the game's default 16, so its threads preempt ours */
+static int scan_nap(uptr a, uptr* end){
+    nn_os_SleepThread(SCAN_NAP);
+    MemoryInfo mi; u32 pi;
+    if(svcQueryMemory(&mi,&pi,a) || (mi.perm&3)!=3 || mi.type!=5 || !MI_PLAIN(mi)) return 0;
+    if(mi.addr+mi.size<*end) *end=mi.addr+mi.size;   /* region split: stop at its new end, the caller resumes there */
+    return 1;
+}
 typedef struct { u32 pid; int n; uptr P[MAXCOPIES]; char name[24]; } Player;
 static Player s_players[MAXPLAYERS]; static int s_nplayers, s_active;
 
@@ -121,12 +133,13 @@ static void use_player(int i){
 static void find_thread(void* arg){
     (void)arg;
     uptr a=0; MemoryInfo mi; u32 pi; s_ncopies=0; s_ncand=0; s_nplayers=0; s_active=0;
-    int empty=0;
+    int empty=0; u64 t0=nn_os_GetSystemTick();
     while(a<0x8000000000ul){
         if(svcQueryMemory(&mi,&pi,a)||mi.size==0) break;
         uptr end=mi.addr+mi.size;
         if((mi.perm&3)==3 && mi.type==5 && MI_PLAIN(mi) && mi.size>=0x1000){
             for(uptr P=mi.addr+0x20; P+0xC0<end; P+=8){
+                if(!(P&(SCAN_CHUNK-1)) && (!scan_nap(P,&end) || P+0xC0>=end)) break;
                 if(*(u32*)(P-4)!=0xFFFFFFFF || *(u32*)(P-0x18)!=0) continue;
                 if(!sig_ok(P)) continue;
                 if(base_ok(P)){
@@ -143,7 +156,7 @@ static void find_thread(void* arg){
         }
         a=end;
     }
-    aden_log("search: %d players, %d empty slots, %d other pocket matches", s_nplayers, empty, s_ncand);
+    aden_log("search: %d players, %d empty slots, %d other pocket matches, %lu ms", s_nplayers, empty, s_ncand, (nn_os_GetSystemTick()-t0)/19200);
     if(s_nplayers){
         /* default to the player with the most copies in memory: that is the one being played */
         int best=0; for(int j=1;j<s_nplayers;j++) if(s_players[j].n>s_players[best].n) best=j;
@@ -174,7 +187,7 @@ void aden_player_find(void){
     g_player_state=1;
     /* a previous search thread must be cleaned up before its slot is reused */
     if(s_th_used){ nn_os_WaitThread(&s_th); nn_os_DestroyThread(&s_th); s_th_used=0; }
-    if(nn_os_CreateThread(&s_th,find_thread,0,s_stack,sizeof s_stack,20)){ g_player_state=3; aden_log("could not start search thread"); return; }
+    if(nn_os_CreateThread(&s_th,find_thread,0,s_stack,sizeof s_stack,SEARCH_PRIO)){ g_player_state=3; aden_log("could not start search thread"); return; }
     s_th_used=1;
     nn_os_StartThread(&s_th);
 }
@@ -273,7 +286,7 @@ static void find_main(void){
     const u32* ph=(const u32*)s_pb[0];
     int need_hdr = ph[0]==0xA0002 && ph[1]==0xA0028;
     aden_log("personal header %x %x %x %x -> %s", ph[0],ph[1],ph[2],ph[3], need_hdr?"using header check":"no header, using layout check");
-    uptr a=0; MemoryInfo mi; u32 pi; int hits=0;
+    uptr a=0; MemoryInfo mi; u32 pi; int hits=0; u64 t0=nn_os_GetSystemTick();
     while(a<0x8000000000ul && s_nmb<4){
         if(svcQueryMemory(&mi,&pi,a)||mi.size==0) break;
         uptr end=mi.addr+mi.size;
@@ -281,6 +294,7 @@ static void find_main(void){
            (graphics, shared, transfer buffers) can disappear under us */
         if((mi.perm&3)==3 && mi.type==5 && MI_PLAIN(mi) && mi.size>=0x1000){
             for(uptr x=mi.addr; x+24<=end; x+=4){
+                if(!(x&(SCAN_CHUNK-1)) && (!scan_nap(x,&end) || x+24>end)) break;
                 if(*(u32*)x!=tid || memcmp((void*)x,town,24)) continue;
                 hits++;
                 uptr M=x-(MAIN_VILL+4);
@@ -305,7 +319,7 @@ static void find_main(void){
         }
         a=end;
     }
-    aden_log("island search: %d town-id hits, %d saves", hits, s_nmb);
+    aden_log("island search: %d town-id hits, %d saves, %lu ms", hits, s_nmb, (nn_os_GetSystemTick()-t0)/19200);
     g_island_state = s_nmb ? 2 : 3;
 }
 static void island_thread(void* arg){ (void)arg; aden_log("island search started"); find_main(); }
@@ -315,7 +329,7 @@ void aden_island_find(void){
     if(g_player_state!=2) return;
     g_island_state=1;
     if(s_th2_used){ nn_os_WaitThread(&s_th2); nn_os_DestroyThread(&s_th2); s_th2_used=0; }
-    if(nn_os_CreateThread(&s_th2,island_thread,0,s_stack2,sizeof s_stack2,20)){ g_island_state=3; aden_log("could not start island thread"); return; }
+    if(nn_os_CreateThread(&s_th2,island_thread,0,s_stack2,sizeof s_stack2,SEARCH_PRIO)){ g_island_state=3; aden_log("could not start island thread"); return; }
     s_th2_used=1;
     nn_os_StartThread(&s_th2);
 }
