@@ -96,10 +96,6 @@ HIDDEN void aden_mod_set(const char* name,int on){
     list_save();
     aden_log("mod %s turned %s", name, on?"on":"off");
 }
-HIDDEN int aden_romfs_active(const char* name){
-    /* was this mod loaded at start-up? */
-    (void)name; return __atomic_load_n(&s_state,__ATOMIC_ACQUIRE)==2;
-}
 
 static void build(void){
     list_load();

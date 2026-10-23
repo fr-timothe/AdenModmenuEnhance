@@ -9,9 +9,8 @@
    Copies are kept in address order, so the cap must stay well above what the game makes:
    a dropped copy may be the live one. */
 #define MAXCOPIES 16
-#define MAXSEEN 24
 static uptr s_copy[MAXCOPIES]; static int s_ncopies;
-#define PERS_P_     0x37CA8
+#define PERS_P      0x37CA8   /* pocket anchor offset inside the personal save */
 #define PERS_ID_PID (0xC248+0x1C)
 #define MAXCAND 48
 #define MAXPLAYERS 8
@@ -41,8 +40,6 @@ volatile int g_island_state;   /* 0 idle, 1 searching, 2 ready, 3 not found */
 static volatile int s_th2_run, s_island_stale;
 static void island_drop(void);
 static OsThread s_th; static u8 s_stack[0x8000] __attribute__((aligned(0x1000)));
-void aden_item_bitmap(u8* bits);
-static u8 s_valid[0x10000/8];
 
 typedef struct { u32 enc; u16 adjust; u8 shift; u8 check; } EncInt;
 #define ENC_CONST 0x80E32B11u
@@ -62,11 +59,6 @@ static int sig_ok(uptr P){
     u32 n=*(u32*)(P+0xA0); if(n!=20 && n!=30 && n!=40) return 0;
     for(int i=0;i<20;i++) if(!slot_ok((u8*)(P+i*8))) return 0;
     return enc_valid((EncInt*)(P+0xB8));
-}
-static void log_encs(uptr P, uptr lo, uptr hi){
-    uptr a=P>lo+0x100000?P-0x100000:lo, b=P+0x100000<hi-8?P+0x100000:hi-8; int n=0;
-    for(;a<b && n<60;a+=4){ EncInt* v=(EncInt*)a; if(!enc_valid(v)) continue; u32 x=enc_get(v); if(x>99999999u) continue;
-        n++; s64 d=(s64)(a-P); aden_log("  enc %s%lx = %u", d<0?"-":"+", d<0?-d:d, x); }
 }
 static int has_stuff(uptr P){
     if(enc_get((EncInt*)(P+0xB8))) return 1;
@@ -92,7 +84,7 @@ static void find_fields(void){
         for(int i=0;i<s_ncopies;i++) for(int k=0;k<2;k++){
             uptr a=s_copy[i]+F->off+(k?STRIDE:0);
             if(nc>=MAXF || !addr_rw(a) || !enc_valid((EncInt*)a)) continue;
-            if(s_nplayers){ uptr pidp=s_copy[i]+(k?STRIDE:0)-PERS_P_+PERS_ID_PID;
+            if(s_nplayers){ uptr pidp=s_copy[i]+(k?STRIDE:0)-PERS_P+PERS_ID_PID;
                 if(!addr_rw(pidp) || *(u32*)pidp!=s_players[s_active].pid) continue; }
             int dup=0; for(int j=0;j<nc;j++) if(cand[j]==a) dup=1; if(dup) continue;
             cand[nc]=a; val[nc]=enc_get((EncInt*)a); nc++;
@@ -126,7 +118,7 @@ static void find_fields(void);
 static uptr s_cand[MAXCAND]; static int s_ncand;
 static int base_ok(uptr P){
     /* the personal save around this pocket must be mapped and hold a valid Nook Miles value */
-    uptr base=P-PERS_P_; MemoryInfo mi; u32 pi;
+    uptr base=P-PERS_P; MemoryInfo mi; u32 pi;
     if(base>P) return 0;
     if(svcQueryMemory(&mi,&pi,base) || (mi.perm&3)!=3 || mi.type==0 || !MI_PLAIN(mi)) return 0;
     if(svcQueryMemory(&mi,&pi,base+0x74A40-8) || (mi.perm&3)!=3 || mi.type==0 || !MI_PLAIN(mi)) return 0;
@@ -152,12 +144,12 @@ static void find_thread(void* arg){
                 if(*(u32*)(P-4)!=0xFFFFFFFF || *(u32*)(P-0x18)!=0) continue;
                 if(!sig_ok(P)) continue;
                 if(base_ok(P)){
-                    u32 pid=*(u32*)(P-PERS_P_+PERS_ID_PID);
-                    u16 c0=*(u16*)(P-PERS_P_+PERS_ID_PID+4);
+                    u32 pid=*(u32*)(P-PERS_P+PERS_ID_PID);
+                    u16 c0=*(u16*)(P-PERS_P+PERS_ID_PID+4);
                     if(!pid || !c0){ empty++; continue; }     /* unused resident slot (no id / no name) */
                     int g=-1; for(int j=0;j<s_nplayers;j++) if(s_players[j].pid==pid) g=j;
                     if(g<0 && s_nplayers<MAXPLAYERS){ g=s_nplayers++; s_players[g].pid=pid; s_players[g].n=0; s_players[g].drop=0;
-                        utf16_name(s_players[g].name,sizeof s_players[g].name,(const u16*)(P-PERS_P_+PERS_ID_PID+4)); }
+                        utf16_name(s_players[g].name,sizeof s_players[g].name,(const u16*)(P-PERS_P+PERS_ID_PID+4)); }
                     if(g>=0 && s_players[g].n<MAXCOPIES){ s_players[g].P[s_players[g].n++]=P;
                         aden_log("player %s (id %x) copy at %lx, wallet %u", s_players[g].name, pid, P, enc_get((EncInt*)(P+0xB8))); }
                     else if(g>=0){ s_players[g].drop++; aden_log("player %s copy at %lx dropped: %d-copy cap", s_players[g].name, P, MAXCOPIES); }
@@ -198,7 +190,6 @@ void aden_player_select(int i){
 static int s_th_used, s_th2_used;
 void aden_player_find(void){
     if(g_player_state==1||g_player_state==2) return;
-    aden_item_bitmap(s_valid);
     g_player_state=1;
     /* a previous search thread must be cleaned up before its slot is reused */
     if(s_th_used){ nn_os_WaitThread(&s_th); nn_os_DestroyThread(&s_th); s_th_used=0; }
@@ -270,7 +261,6 @@ int aden_pocket_add(u16 id, int qty, int stack){
    same layout as the file on disk, so NHSE's 3.0 offsets apply directly.
    P (our pocket anchor) sits at PERS_P inside the personal save.
    ===================================================================== */
-#define PERS_P       0x37CA8
 #define PERS_SIZE    0x74A40
 #define PERS_ID      0xC248     /* TownId{u32,u16[10]} then PlayerId at +0x1C{u32,u16[10]} */
 #define PERS_MILES   0x12718
