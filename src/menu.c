@@ -119,6 +119,12 @@ static int contains(const char* h,const char* n){
     for(;*h;h++){ const char* a=h; const char* b=n; while(*a&&*b&&ieq(*a,*b)){a++;b++;} if(!*b) return 1; }
     return 0;
 }
+/* items whose count field holds a recipe ID: spawned with 0 they come out broken */
+static const char* needs_param(u16 id){
+    if(id==0x16A2) return "DIY recipe cards need a recipe ID - learn them in the Player tab";
+    if(id==0x16A1) return "Message bottles need a recipe ID - nothing was added";
+    return 0;
+}
 static void refilter(void){
     if(!s_match) s_match=malloc(sizeof(int)*(s_nitems+1));
     s_nmatch=0;
@@ -200,8 +206,12 @@ static void tab_items(void){
     }
     if(up() && *cur>0) (*cur)--; if(down() && *cur<s_nmatch-1) (*cur)++;
     if(left()) { *cur-=LIST; if(*cur<0)*cur=0; } if(right()) { *cur+=LIST; if(*cur>s_nmatch-1)*cur=s_nmatch-1; }
-    if(pr(B_ZL) && s_qty>1) s_qty = s_qty>10 ? s_qty-10 : s_qty-1;
-    if(pr(B_ZR) && s_qty<99) s_qty = s_qty>=10 ? (s_qty+10>99?99:s_qty+10) : s_qty+1;
+    /* stackables go up to 40 full slots, the rest to 99; s_qty keeps the asked amount across items */
+    Item* si= s_nmatch ? &s_items[s_match[*cur]] : 0;
+    int mx= si && si->stack>1 ? 40*si->stack : 99, q= s_qty>mx ? mx : s_qty;
+    if(pr(B_ZL) && q>1)  s_qty = q>100 ? q-100 : q>10 ? q-10 : q-1;
+    if(pr(B_ZR) && q<mx){ s_qty = q>=100 ? q+100 : q>=10 ? q+10 : q+1; if(s_qty>mx) s_qty=mx; }
+    q= s_qty>mx ? mx : s_qty;
     if(pr(B_Y)) { s_typing=1; return; }
     if(*cur<*top) *top=*cur; if(*cur>=*top+LIST) *top=*cur-LIST+1;
     for(int i=0;i<LIST && *top+i<s_nmatch;i++){
@@ -211,7 +221,8 @@ static void tab_items(void){
         put(ROW0+2+i,0,C_TEXT,"%s %04X %s",nm,it->id,it->cat);
         if(sel) s_hl_row=ROW0+2+i;
     }
-    put(ROW0+LIST+3,0,C_TEXT,"Amount: %d     Send to: %s",s_qty,s_to_storage?"home storage":"pockets");
+    if(si && needs_param(si->id)) text(ROW0+LIST+3,C_DIM,"Needs a recipe ID - cannot be spawned here");
+    else put(ROW0+LIST+3,0,C_TEXT,"Amount: %d (max %d)   Send to: %s",q,mx,s_to_storage?"home storage":"pockets");
     text(26,C_DIM,"A spawn  X pockets/storage  Y search  ZL/ZR amount  - rescan");
     /* who receives spawned items; Minus redoes the player search (not while the island thread reads the copies) */
     if(pr(B_MINUS) && g_player_state!=1 && g_island_state!=1){ s_status[0]=0; g_player_state=0; g_island_state=0; aden_player_find(); }
@@ -222,14 +233,15 @@ static void tab_items(void){
         if(pr(B_A)){ s_status[0]=0; aden_player_find(); return; } }   /* A retries instead of spawning */
     if(pr(B_X)) s_to_storage=!s_to_storage;
     if(pr(B_A) && s_nmatch){
-        Item* it=&s_items[s_match[*cur]];
-        int r= s_to_storage ? aden_storage_add(it->id,s_qty,it->stack) : aden_pocket_add(it->id,s_qty,it->stack);
+        Item* it=si; const char* np=needs_param(it->id);
+        if(np){ aden_snprintf(s_status,sizeof s_status,"%s",np); return; }
+        int r= s_to_storage ? aden_storage_add(it->id,q,it->stack) : aden_pocket_add(it->id,q,it->stack);
         /* -1 player data not ready, -2 data looks wrong (nothing written) */
         if(r==-1) aden_snprintf(s_status,sizeof s_status,s_to_storage?"Home storage not found yet - try again in a moment":"Player data not ready yet - try again in a moment");
         else if(r<0) aden_snprintf(s_status,sizeof s_status,s_to_storage?"Home storage looks wrong - nothing was added":"Pockets look wrong - nothing was added");
         else if(s_to_storage) aden_snprintf(s_status,sizeof s_status,r?"Sent %d x %s to home storage":"Home storage is full",r,it->name);
         else if(r==0) aden_snprintf(s_status,sizeof s_status,"Your pockets are full");
-        else if(r<s_qty) aden_snprintf(s_status,sizeof s_status,"Added %d x %s (pockets now full)",r,it->name);
+        else if(r<q) aden_snprintf(s_status,sizeof s_status,"Added %d x %s (pockets now full)",r,it->name);
         else aden_snprintf(s_status,sizeof s_status,"Added %d x %s to your pockets",r,it->name);
     }
 }
