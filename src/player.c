@@ -107,7 +107,8 @@ static int field_live(int f){
     F->n=k; return k;
 }
 int aden_stat_ok(int f){ return g_player_state==2 && f>=0 && f<3 && s_fields[f].n>0; }
-u32 aden_stat_get(int f){ return aden_stat_ok(f) ? enc_get((EncInt*)s_fields[f].a[0]) : 0; }
+/* cached addresses are re-checked before every read: memory can move after loading screens */
+u32 aden_stat_get(int f){ return aden_stat_ok(f) && addr_rw(s_fields[f].a[0]) ? enc_get((EncInt*)s_fields[f].a[0]) : 0; }
 void aden_stat_set(int f,u32 v){
     if(!aden_stat_ok(f) || !field_live(f)) return;
     for(int i=0;i<s_fields[f].n;i++) enc_set((EncInt*)s_fields[f].a[i],v);
@@ -208,6 +209,7 @@ static uptr s_pb[MAXF]; static int s_npb;          /* personal save bases */
 static uptr s_mb[4]; static int s_nmb;             /* island (main) save bases */
 #define STALE_CHECKS 8
 static int range_rw(uptr a, uptr len);
+static int heap_rw(uptr a, uptr len);
 static int still_ok(void){
     /* an unmapped copy counts as bad too: sig_ok would fault on it (it reads P-0xB8..P+0xC0) */
     for(int i=0;i<s_ncopies;i++) if(!range_rw(s_copy[i]-0xB8,0x178) || !sig_ok(s_copy[i])){
@@ -222,9 +224,10 @@ static int still_ok(void){
 }
 int aden_player_ready(void){ return g_player_state==2 && still_ok(); }
 int aden_player_copies(void){ return s_ncopies; }
-u32 aden_wallet_get(void){ return s_ncopies? enc_get((EncInt*)(s_copy[0]+0xB8)) : 0; }
+u32 aden_wallet_get(void){ return s_ncopies && heap_rw(s_copy[0]+0xB8,8) ? enc_get((EncInt*)(s_copy[0]+0xB8)) : 0; }
 void aden_wallet_set(u32 v){
     if(v>99999) v=99999;
+    if(!aden_player_ready()) return;   /* checks every copy is still mapped and valid */
     for(int i=0;i<s_ncopies;i++) enc_set((EncInt*)(s_copy[i]+0xB8),v);
     aden_log("wallet set to %u in %d copies", v, s_ncopies);
 }
@@ -374,7 +377,7 @@ static void utf16_ascii(char* out,int cap,const u16* s,int n){
 }
 void aden_player_names(char* player,char* town,int cap){
     player[0]=town[0]=0; if(!pers_ok()) return;
-    uptr id=s_pb[0]+PERS_ID;
+    uptr id=s_pb[0]+PERS_ID; if(!range_rw(id,0x34)) return;
     utf16_ascii(town,cap,(const u16*)(id+4),10);
     utf16_ascii(player,cap,(const u16*)(id+0x20),10);
 }
@@ -385,6 +388,7 @@ int aden_recipes_learn_all(void){
     int learned=0;
     for(int c=0;c<s_npb;c++){
         u8* R=(u8*)(s_pb[c]+PERS_RECIPES);
+        if(!range_rw((uptr)R,0x300)){ aden_log("recipes: copy %d not mapped, skipped", c); continue; }
         int bad=0; for(int i=0;i<0x800;i++) if((R[i>>3]>>(i&7)&1) && !(g_recipe_valid[i>>3]>>(i&7)&1)) bad++;
         if(bad>16){ aden_log("recipes: copy %d looks wrong (%d odd bits), skipped", c, bad); continue; }
         int n=0;
@@ -398,7 +402,7 @@ int aden_recipes_learn_all(void){
     return learned;
 }
 int aden_recipes_known(void){
-    if(!pers_ok()) return 0; const u8* R=(const u8*)(s_pb[0]+PERS_RECIPES); int n=0;
+    if(!pers_ok() || !range_rw(s_pb[0]+PERS_RECIPES,0x100)) return 0; const u8* R=(const u8*)(s_pb[0]+PERS_RECIPES); int n=0;
     for(int i=0;i<0x800;i++) if((R[i>>3]>>(i&7)&1) && (g_recipe_valid[i>>3]>>(i&7)&1)) n++;
     return n;
 }
@@ -410,6 +414,7 @@ int aden_reactions_learn_all(void){
     int added=0;
     for(int c=0;c<s_npb;c++){
         u8* M=(u8*)(s_pb[c]+PERS_MANPU);
+        if(!range_rw((uptr)M,256+8+256)){ aden_log("reactions: copy %d not mapped, skipped", c); continue; }
         int bad=0; for(int i=0;i<256;i++) if(M[i]>120) bad++;
         if(bad){ aden_log("reactions: copy %d looks wrong, skipped", c); continue; }
         int n=0;
@@ -425,7 +430,7 @@ int aden_reactions_learn_all(void){
     return added;
 }
 int aden_reactions_known(void){
-    if(!pers_ok()) return 0; const u8* M=(const u8*)(s_pb[0]+PERS_MANPU); int n=0;
+    if(!pers_ok() || !range_rw(s_pb[0]+PERS_MANPU,256)) return 0; const u8* M=(const u8*)(s_pb[0]+PERS_MANPU); int n=0;
     for(int i=0;i<256;i++) if(M[i] && M[i]<=120) n++;
     return n;
 }
@@ -475,10 +480,10 @@ int aden_storage_free(void){
 }
 
 /* ---- turnips ---- */
-u32 aden_turnip_sell(void){ return s_nmb ? *(u32*)(s_mb[0]+MAIN_KABU+4) : 0; }
-u32 aden_turnip_buy(void){ return s_nmb ? *(u32*)(s_mb[0]+MAIN_KABU) : 0; }
+u32 aden_turnip_sell(void){ return s_nmb && heap_rw(s_mb[0]+MAIN_KABU,8) ? *(u32*)(s_mb[0]+MAIN_KABU+4) : 0; }
+u32 aden_turnip_buy(void){ return s_nmb && heap_rw(s_mb[0]+MAIN_KABU,8) ? *(u32*)(s_mb[0]+MAIN_KABU) : 0; }
 void aden_turnip_set(int sell,u32 v){
-    for(int c=0;c<s_nmb;c++){ u32* k=(u32*)(s_mb[c]+MAIN_KABU);
+    for(int c=0;c<s_nmb;c++){ u32* k=(u32*)(s_mb[c]+MAIN_KABU); if(!heap_rw((uptr)k,15*4)) continue;
         if(sell) for(int i=1;i<15;i++) k[i]=v; else k[0]=v; }
     aden_log("turnip %s price set to %u", sell?"sell":"buy", v);
 }
@@ -486,13 +491,14 @@ void aden_turnip_set(int sell,u32 v){
 /* ---- villagers ---- */
 static uptr vill(int c,int k){ return s_mb[c]+MAIN_VILL+(uptr)k*VILL_SIZE; }
 static int my_mem(uptr V){
-    if(!pers_ok()) return -1; u32 me=*(u32*)(s_pb[0]+PERS_ID+0x1C);
+    if(!pers_ok() || !range_rw(s_pb[0]+PERS_ID+0x1C,4)) return -1; u32 me=*(u32*)(s_pb[0]+PERS_ID+0x1C);
     for(int j=0;j<8;j++) if(*(u32*)(V+4+j*MEM_SIZE+0x1C)==me) return j;
     return -1;
 }
 int aden_villager_info(int k,const char** name,int* friendship,int* moving){
     if(!s_nmb || k<0 || k>=VILL_N) return 0;
-    uptr V=vill(0,k); u8 sp=*(u8*)V, var=*(u8*)(V+1);
+    uptr V=vill(0,k); if(!heap_rw(V,VILL_SIZE)) return 0;
+    u8 sp=*(u8*)V, var=*(u8*)(V+1);
     if(sp>=35) return 0;
     *name="(unknown)";
     for(int i=0;i<g_nvnames;i++) if(g_vnames[i].sp==sp && g_vnames[i].var==var){ *name=g_vnames[i].name; break; }
@@ -501,10 +507,12 @@ int aden_villager_info(int k,const char** name,int* friendship,int* moving){
     return 1;
 }
 void aden_villager_friend(int k,u8 v){
-    for(int c=0;c<s_nmb;c++){ uptr V=vill(c,k); if(*(u8*)V>=35) continue; int j=my_mem(V); if(j>=0) *(u8*)(V+4+j*MEM_SIZE+0x38+10)=v; }
+    if(k<0 || k>=VILL_N) return;
+    for(int c=0;c<s_nmb;c++){ uptr V=vill(c,k); if(!heap_rw(V,VILL_SIZE) || *(u8*)V>=35) continue; int j=my_mem(V); if(j>=0) *(u8*)(V+4+j*MEM_SIZE+0x38+10)=v; }
     aden_log("villager %d friendship set to %u", k, v);
 }
 void aden_villager_moving(int k,int on){
-    for(int c=0;c<s_nmb;c++){ u8* m=(u8*)(vill(c,k)+0x1267a); *m=(u8)((*m&~2)|(on?2:0)); }
+    if(k<0 || k>=VILL_N) return;
+    for(int c=0;c<s_nmb;c++){ if(!heap_rw(vill(c,k),VILL_SIZE)) continue; u8* m=(u8*)(vill(c,k)+0x1267a); *m=(u8)((*m&~2)|(on?2:0)); }
     aden_log("villager %d moving out = %d", k, on);
 }
