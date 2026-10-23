@@ -97,6 +97,7 @@ static void load_items(void){
     while(*p){
         char* nl=p; while(*nl && *nl!='\n') nl++;
         char* line=p; p=*nl?nl+1:nl; *nl=0;
+        if(nl>line && nl[-1]=='\r') nl[-1]=0;   /* CRLF files */
         if(line[0]=='#'||!line[0]) continue;
         char* t1=line; while(*t1 && *t1!='\t') t1++; if(!*t1) continue; *t1++=0;
         char* t2=t1; while(*t2 && *t2!='\t') t2++; if(!*t2) continue; *t2++=0;
