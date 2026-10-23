@@ -59,6 +59,7 @@ static uptr find_free(u64 size){
 }
 
 static int map_alias(uptr rx, u64 size){
+    if(s_nalias>=(int)(sizeof s_alias/sizeof s_alias[0])){ aden_log("alias table full, can't map %lx",rx); return -1; }
     rx=ALIGN_DOWN(rx,PAGE); size=ALIGN_UP(size,PAGE);
     uptr rw=find_free(size); if(!rw){ aden_log("no free VA for %lx",size); return -1; }
     uptr a=rx;
@@ -133,6 +134,8 @@ HIDDEN int aden_hook(uptr site, void* fn, void** orig){
     if(!w){ aden_log("hook %lx: not mapped",site); return -1; }
     s64 d=(s64)((uptr)fn-site); int nwords = (d>=-0x8000000 && d<0x8000000) ? 1 : 4;
     if(orig){
+        /* worst case: 4 relocated insns of up to 5 words each + the 4-word jump back */
+        if(s_tramp_used+4*5+4 > (u32)((aden_tramp_area_end-aden_tramp_area)/4)){ aden_log("hook %lx: trampoline area full",site); return -1; }
         T_rw=s_tramp_rw+s_tramp_used; T_rx=(uptr)(s_tramp_rx+s_tramp_used); T_n=0;
         uptr start=here();
         for(int i=0;i<nwords;i++) if(relocate(((u32*)site)[i], site+i*4)){ aden_log("hook %lx: can't relocate insn %d (%x)",site,i,((u32*)site)[i]); return -1; }
