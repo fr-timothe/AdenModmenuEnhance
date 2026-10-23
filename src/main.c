@@ -15,7 +15,7 @@ static void hk_nnMain(void){
 }
 
 void aden_module_init(void){
-    aden_log("Aden Modmenu v0.5.3 loaded (module at %p)", __module_start);
+    aden_log("Aden Modmenu v%s loaded (module at %p)", ADEN_VERSION, __module_start);
     /* main's code segment = the executable region holding nnMain */
     MemoryInfo mi; u32 pi;
     if(svcQueryMemory(&mi,&pi,(uptr)&nnMain) || !(mi.perm&4)){ aden_log("could not locate game code - mod disabled"); return; }

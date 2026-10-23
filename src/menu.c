@@ -386,7 +386,7 @@ static void tab_mods(void){
     if(s_modmsg[0]) text(ROW0+22,C_DIM,s_modmsg);
 }
 static void tab_about(void){
-    text(ROW0,C_TEXT,"Aden Modmenu v0.5.3 for ACNH 3.0.2 / 3.0.3");
+    text(ROW0,C_TEXT,"Aden Modmenu v" ADEN_VERSION " for ACNH 3.0.2 / 3.0.3");
     text(ROW0+2,C_DIM,"Open from the Nook Phone. B closes.");
     text(ROW0+3,C_DIM,"Your character is paused while it is open.");
 }
