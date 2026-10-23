@@ -207,8 +207,10 @@ void aden_player_find(void){
 static uptr s_pb[MAXF]; static int s_npb;          /* personal save bases */
 static uptr s_mb[4]; static int s_nmb;             /* island (main) save bases */
 #define STALE_CHECKS 8
+static int range_rw(uptr a, uptr len);
 static int still_ok(void){
-    for(int i=0;i<s_ncopies;i++) if(!sig_ok(s_copy[i])){
+    /* an unmapped copy counts as bad too: sig_ok would fault on it (it reads P-0xB8..P+0xC0) */
+    for(int i=0;i<s_ncopies;i++) if(!range_rw(s_copy[i]-0xB8,0x178) || !sig_ok(s_copy[i])){
         if(++s_bad<STALE_CHECKS) return 0;
         aden_log("player copy %d at %lx went stale, searching again", i, s_copy[i]);
         s_ncopies=0; s_npb=0; s_bad=0; for(int f=0;f<3;f++) s_fields[f].n=0;
@@ -226,12 +228,15 @@ void aden_wallet_set(u32 v){
     for(int i=0;i<s_ncopies;i++) enc_set((EncInt*)(s_copy[i]+0xB8),v);
     aden_log("wallet set to %u in %d copies", v, s_ncopies);
 }
-/* returns number of items placed */
+/* >= 0 items placed, -1 player data not ready, -2 pockets look wrong (nothing written) */
 int aden_pocket_add(u16 id, int qty, int stack){
-    if(!aden_player_ready()) return -1;
+    if(!aden_player_ready()) return -1;   /* also checks every copy is still mapped and valid */
     uptr P=s_copy[0]; u32 size=*(u32*)(P+0xA0);
     /* a copy may still hold the size from before an upgrade: never fill a slot locked in any copy */
     for(int c=1;c<s_ncopies;c++){ u32 z=*(u32*)(s_copy[c]+0xA0); if(z<size) size=z; }
+    /* sig_ok covers slots 0-19; the unlocked part of pocket 2 must look like items too */
+    for(int c=0;c<s_ncopies;c++) for(u32 i=20;i<size && i<40;i++) if(!slot_ok((u8*)(s_copy[c]-0xB8+(i-20)*8))){
+        aden_log("pocket copy %d slot %u looks wrong, not touching pockets", c, i); return -2; }
     int placed=0;
     while(qty>0){
         int slot=-1;
@@ -428,13 +433,31 @@ int aden_reactions_known(void){
 /* ---- home storage ---- */
 /* copies can differ: a slot is free only if it is empty in every copy we write */
 static int chest_free(int i){ for(int c=0;c<s_npb;c++) if(*(u16*)(s_pb[c]+PERS_CHEST+i*8)!=0xFFFE) return 0; return 1; }
+/* NHSE (Personal.ItemChestCount): the u32 right after the 9000 slots is how many slots the
+   storage upgrades unlocked. The game never shows slots past it, so stay below the smallest
+   count of all copies. A count of 0 or above 9000 means the base is wrong.
+   Returns the usable slot count, -1 not ready, -2 storage looks wrong. */
+#define CHEST_CNT    (PERS_CHEST+CHEST_N*8)
+static int chest_cap(void){
+    if(!aden_player_ready() || !s_npb) return -1;   /* also catches stale copies before reading */
+    int cap=CHEST_N;
+    for(int c=0;c<s_npb;c++){
+        uptr S=s_pb[c]+PERS_CHEST; u32 n;
+        if(!range_rw(S,CHEST_N*8+4)) return -1;     /* memory moved: the stale check will search again */
+        n=*(u32*)(s_pb[c]+CHEST_CNT);
+        if(!n || n>CHEST_N){ aden_log("storage copy %d: count %u looks wrong, not touching it", c, n); return -2; }
+        if((int)n<cap) cap=(int)n;
+        for(int i=0;i<64;i++) if(!slot_ok((u8*)(S+i*8))){ aden_log("storage copy %d looks wrong, not touching it", c); return -2; }
+    }
+    return cap;
+}
+/* >= 0 items placed, -1 player data not ready, -2 storage looks wrong (nothing written) */
 int aden_storage_add(u16 id,int qty,int stack){
-    if(!aden_player_ready() || !s_npb) return -1;   /* also catches stale copies before writing */
-    uptr S0=s_pb[0]+PERS_CHEST; int placed=0, slot=0;
-    for(int i=0;i<64;i++) if(!slot_ok((u8*)(S0+i*8))){ aden_log("storage looks wrong, not touching it"); return -1; }
+    int cap=chest_cap(), placed=0, slot=0;
+    if(cap<0) return cap;
     while(qty>0){
-        while(slot<CHEST_N && !chest_free(slot)) slot++;
-        if(slot>=CHEST_N) break;
+        while(slot<cap && !chest_free(slot)) slot++;
+        if(slot>=cap) break;
         int n = stack>1 ? (qty>stack?stack:qty) : 1;
         for(int c=0;c<s_npb;c++){
             uptr s=s_pb[c]+PERS_CHEST+slot*8;
@@ -442,12 +465,12 @@ int aden_storage_add(u16 id,int qty,int stack){
         }
         qty-=n; placed+=n; slot++;
     }
-    aden_log("storage add %04X: placed %d", id, placed);
+    aden_log("storage add %04X: placed %d (%d usable slots)", id, placed, cap);
     return placed;
 }
 int aden_storage_free(void){
-    if(!pers_ok()) return 0; int n=0;
-    for(int i=0;i<CHEST_N;i++) if(chest_free(i)) n++;
+    int cap=chest_cap(), n=0;
+    for(int i=0;i<cap;i++) if(chest_free(i)) n++;
     return n;
 }
 
