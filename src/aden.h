@@ -42,6 +42,7 @@ int   aden_snprintf(char*, size_t, const char*, ...);
 void aden_log(const char* fmt, ...);
 void aden_log_attach_sd(void);   /* call once nn::fs is usable */
 int  aden_sd_ready(void);
+void aden_log_flush(void);       /* write pending SD lines; called once per frame */
 
 /* hook.c */
 int   aden_hook_init(void);

@@ -102,6 +102,7 @@ static void h_dbgdraw(void* self, uptr info){
     cur_info=info; cur_ok=1; s_prints=0;
     aden_menu_draw();
     cur_ok=0;
+    aden_log_flush();
 }
 void aden_gfx_install(void){
     f_setup =(void*)SIGA(TW_SETUP);
