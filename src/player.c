@@ -191,7 +191,7 @@ static void find_thread(void* arg){
     aden_log("search: %d players, %d empty slots, %d other pocket matches, %lu ms", s_nplayers, empty, s_ncand, (nn_os_GetSystemTick()-t0)/19200);
     if(s_attr_rej) aden_log("search: %d pockets skipped for memory attributes (last attr %x)", s_attr_rej, s_attr_last);
     for(int i=0;i<8;i++) if(s_skip_n[i]) aden_log("search: skipped heap with attr %x: %d regions, %lu MB", i, s_skip_n[i], s_skip_mb[i]>>20);
-    if(1){   /* PROBE: always scan DeviceShared too
+    if(1){   /* PROBE: always scan DeviceShared too */
         /* nothing in plain memory: read the GPU-mapped heap too (may lower FPS on Eden with Reactive Flushing on) */
         t0=nn_os_GetSystemTick(); empty=0;
         scan_players(1,&empty);
