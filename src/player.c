@@ -18,6 +18,10 @@ static uptr s_copy[MAXCOPIES]; static int s_ncopies;
    Never read GPU-mapped pages: on Eden one CPU read makes reactive flushing copy
    that buffer back from the GPU every frame for the rest of the session. */
 #define MI_PLAIN(mi) (((mi).attr&7)==0)
+/* targeted reads (a few bytes at a known address) only need the page not to be Locked, as in v0.5.3:
+   the save buffers themselves can sit in IPC/device-attributed pages, and MI_PLAIN there hid every player */
+#define MI_RW(mi)    (((mi).attr&1)==0)
+static int s_attr_rej; static u32 s_attr_last;   /* base_ok rejects caused by attributes (logged per search) */
 /* searches share the CPU with the game: nap at every SCAN_CHUNK boundary (~1k naps per 4 GB: few, since
    Eden can round a guest sleep up to 1-15 ms), then re-check the region, since the game may remap memory while we sleep */
 #define SCAN_CHUNK  0x400000
@@ -76,7 +80,7 @@ static Field s_fields[3]={ {"miles",-0x25590,0,{0}}, {"bank",0x2D5D4,0,{0}}, {"p
 static int addr_rw(uptr a){
     MemoryInfo mi; u32 pi;
     if(svcQueryMemory(&mi,&pi,a)) return 0;
-    return (mi.perm&3)==3 && MI_PLAIN(mi) && mi.type!=0 && a+8<=mi.addr+mi.size;
+    return (mi.perm&3)==3 && MI_RW(mi) && mi.type!=0 && a+8<=mi.addr+mi.size;
 }
 static void find_fields(void){
     for(int f=0;f<3;f++){
@@ -120,8 +124,10 @@ static int base_ok(uptr P){
     /* the personal save around this pocket must be mapped and hold a valid Nook Miles value */
     uptr base=P-PERS_P; MemoryInfo mi; u32 pi;
     if(base>P) return 0;
-    if(svcQueryMemory(&mi,&pi,base) || (mi.perm&3)!=3 || mi.type==0 || !MI_PLAIN(mi)) return 0;
-    if(svcQueryMemory(&mi,&pi,base+0x74A40-8) || (mi.perm&3)!=3 || mi.type==0 || !MI_PLAIN(mi)) return 0;
+    if(svcQueryMemory(&mi,&pi,base) || (mi.perm&3)!=3 || mi.type==0) return 0;
+    if(!MI_RW(mi)){ s_attr_rej++; s_attr_last=mi.attr; return 0; }
+    if(svcQueryMemory(&mi,&pi,base+0x74A40-8) || (mi.perm&3)!=3 || mi.type==0) return 0;
+    if(!MI_RW(mi)){ s_attr_rej++; s_attr_last=mi.attr; return 0; }
     return enc_valid((EncInt*)(base+0x12718));
 }
 static void utf16_name(char* out,int cap,const u16* s){ int k=0; for(int i=0;i<10 && s[i] && k<cap-1;i++) out[k++]= s[i]<128?(char)s[i]:'?'; out[k]=0; }
@@ -134,7 +140,7 @@ static void use_player(int i){
 static void find_thread(void* arg){
     (void)arg;
     uptr a=0; MemoryInfo mi; u32 pi; s_ncopies=0; s_ncand=0; s_nplayers=0; s_active=0;
-    int empty=0; u64 t0=nn_os_GetSystemTick();
+    int empty=0; u64 t0=nn_os_GetSystemTick(); s_attr_rej=0;
     while(a<0x8000000000ul){
         if(svcQueryMemory(&mi,&pi,a)||mi.size==0) break;
         uptr end=mi.addr+mi.size;
@@ -159,6 +165,7 @@ static void find_thread(void* arg){
         a=end;
     }
     aden_log("search: %d players, %d empty slots, %d other pocket matches, %lu ms", s_nplayers, empty, s_ncand, (nn_os_GetSystemTick()-t0)/19200);
+    if(s_attr_rej) aden_log("search: %d pockets skipped for memory attributes (last attr %x)", s_attr_rej, s_attr_last);
     if(s_nplayers){
         /* default to the player with the most copies in memory: that is the one being played.
            A tie goes to the lowest PlayerID, so the guess does not depend on where memory landed. */
@@ -285,7 +292,7 @@ static int range_chk(uptr a, uptr len, int heap_only){
     /* every page in [a, a+len) must be plain read/write memory (and game heap if heap_only) */
     uptr e=a+len;
     while(a<e){ MemoryInfo mi; u32 pi; if(svcQueryMemory(&mi,&pi,a) || mi.size==0) return 0;
-        if((mi.perm&3)!=3 || mi.type==0 || !MI_PLAIN(mi) || (heap_only && mi.type!=5)) return 0; a=mi.addr+mi.size; }
+        if((mi.perm&3)!=3 || mi.type==0 || !MI_RW(mi) || (heap_only && mi.type!=5)) return 0; a=mi.addr+mi.size; }
     return 1;
 }
 static int range_rw(uptr a, uptr len){ return range_chk(a,len,0); }
