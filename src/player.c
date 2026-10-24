@@ -14,11 +14,18 @@ static uptr s_copy[MAXCOPIES]; static int s_ncopies;
 #define PERS_ID_PID (0xC248+0x1C)
 #define MAXCAND 48
 #define MAXPLAYERS 8
-/* memory the bulk scans may read: not Locked (0x1) nor DeviceShared (0x4, GPU-mapped). IpcLocked (0x2) is fine:
-   the save data can sit there (beta.1/beta.2 skipped it and found no player).
-   Never read GPU-mapped pages: on Eden one CPU read makes reactive flushing copy
+#define DEV_MIN     0x74A40   /* PERS_SIZE: smallest DeviceShared region the second pass scans */
+/* memory the bulk scans read first: not Locked (0x1) nor DeviceShared (0x4, GPU-mapped). IpcLocked (0x2) is fine.
+   Avoid GPU-mapped pages when possible: on Eden one CPU read makes reactive flushing copy
    that buffer back from the GPU every frame for the rest of the session. */
 #define MI_PLAIN(mi) (((mi).attr&5)==0)
+/* second pass, only when the first finds nothing: DeviceShared heap that is not Locked.
+   On Eden 3.0.3 the save data sits there (beta.3 log: 505 MB skipped, no player found).
+   Regions smaller than a personal save cannot hold one. */
+#define MI_DEV(mi)   (((mi).attr&5)==4)
+static int scan_ok(const MemoryInfo* mi, int dev){
+    return (mi->perm&3)==3 && mi->type==5 && (dev ? MI_DEV(*mi) && mi->size>=DEV_MIN : MI_PLAIN(*mi) && mi->size>=0x1000);
+}
 static u64 s_skip_mb[8]; static int s_skip_n[8];   /* rw heap the player scan skipped, by attr&7 (logged per search) */
 /* targeted reads (a few bytes at a known address) only need the page not to be Locked, as in v0.5.3:
    the save buffers themselves can sit in IPC/device-attributed pages, and MI_PLAIN there hid every player */
@@ -29,10 +36,10 @@ static int s_attr_rej; static u32 s_attr_last;   /* base_ok rejects caused by at
 #define SCAN_CHUNK  0x400000
 #define SCAN_NAP    1000000    /* ns */
 #define SEARCH_PRIO 24         /* below the game's default 16, so its threads preempt ours */
-static int scan_nap(uptr a, uptr* end){
+static int scan_nap(uptr a, uptr* end, int dev){
     nn_os_SleepThread(SCAN_NAP);
     MemoryInfo mi; u32 pi;
-    if(svcQueryMemory(&mi,&pi,a) || (mi.perm&3)!=3 || mi.type!=5 || !MI_PLAIN(mi)) return 0;
+    if(svcQueryMemory(&mi,&pi,a) || (mi.perm&3)!=3 || mi.type!=5 || (dev ? !MI_DEV(mi) : !MI_PLAIN(mi))) return 0;
     if(mi.addr+mi.size<*end) *end=mi.addr+mi.size;   /* region split: stop at its new end, the caller resumes there */
     return 1;
 }
@@ -139,23 +146,22 @@ static void use_player(int i){
     for(int k=0;k<s_players[i].n && k<MAXCOPIES;k++) s_copy[s_ncopies++]=s_players[i].P[k];
     find_fields(); find_personal_bases();
 }
-static void find_thread(void* arg){
-    (void)arg;
-    uptr a=0; MemoryInfo mi; u32 pi; s_ncopies=0; s_ncand=0; s_nplayers=0; s_active=0;
-    int empty=0; u64 t0=nn_os_GetSystemTick(); s_attr_rej=0; memset(s_skip_mb,0,sizeof s_skip_mb); memset(s_skip_n,0,sizeof s_skip_n);
+/* one pass over the heap; dev=0 plain memory, dev=1 DeviceShared memory (see MI_DEV) */
+static void scan_players(int dev, int* empty){
+    uptr a=0; MemoryInfo mi; u32 pi;
     while(a<0x8000000000ul){
         if(svcQueryMemory(&mi,&pi,a)||mi.size==0) break;
         uptr end=mi.addr+mi.size;
-        if((mi.perm&3)==3 && mi.type==5 && !MI_PLAIN(mi)){ s_skip_n[mi.attr&7]++; s_skip_mb[mi.attr&7]+=mi.size; }
-        if((mi.perm&3)==3 && mi.type==5 && MI_PLAIN(mi) && mi.size>=0x1000){
+        if(!dev && (mi.perm&3)==3 && mi.type==5 && !MI_PLAIN(mi)){ s_skip_n[mi.attr&7]++; s_skip_mb[mi.attr&7]+=mi.size; }
+        if(scan_ok(&mi,dev)){
             for(uptr P=mi.addr+0x20; P+0xC0<end; P+=8){
-                if(!(P&(SCAN_CHUNK-1)) && (!scan_nap(P,&end) || P+0xC0>=end)) break;
+                if(!(P&(SCAN_CHUNK-1)) && (!scan_nap(P,&end,dev) || P+0xC0>=end)) break;
                 if(*(u32*)(P-4)!=0xFFFFFFFF || *(u32*)(P-0x18)!=0) continue;
                 if(!sig_ok(P)) continue;
                 if(base_ok(P)){
                     u32 pid=*(u32*)(P-PERS_P+PERS_ID_PID);
                     u16 c0=*(u16*)(P-PERS_P+PERS_ID_PID+4);
-                    if(!pid || !c0){ empty++; continue; }     /* unused resident slot (no id / no name) */
+                    if(!pid || !c0){ (*empty)++; continue; }     /* unused resident slot (no id / no name) */
                     int g=-1; for(int j=0;j<s_nplayers;j++) if(s_players[j].pid==pid) g=j;
                     if(g<0 && s_nplayers<MAXPLAYERS){ g=s_nplayers++; s_players[g].pid=pid; s_players[g].n=0; s_players[g].drop=0;
                         utf16_name(s_players[g].name,sizeof s_players[g].name,(const u16*)(P-PERS_P+PERS_ID_PID+4)); }
@@ -167,9 +173,21 @@ static void find_thread(void* arg){
         }
         a=end;
     }
+}
+static void find_thread(void* arg){
+    (void)arg;
+    s_ncopies=0; s_ncand=0; s_nplayers=0; s_active=0;
+    int empty=0; u64 t0=nn_os_GetSystemTick(); s_attr_rej=0; memset(s_skip_mb,0,sizeof s_skip_mb); memset(s_skip_n,0,sizeof s_skip_n);
+    scan_players(0,&empty);
     aden_log("search: %d players, %d empty slots, %d other pocket matches, %lu ms", s_nplayers, empty, s_ncand, (nn_os_GetSystemTick()-t0)/19200);
     if(s_attr_rej) aden_log("search: %d pockets skipped for memory attributes (last attr %x)", s_attr_rej, s_attr_last);
     for(int i=0;i<8;i++) if(s_skip_n[i]) aden_log("search: skipped heap with attr %x: %d regions, %lu MB", i, s_skip_n[i], s_skip_mb[i]>>20);
+    if(!s_nplayers){
+        /* nothing in plain memory: read the GPU-mapped heap too (may lower FPS on Eden with Reactive Flushing on) */
+        t0=nn_os_GetSystemTick(); empty=0;
+        scan_players(1,&empty);
+        aden_log("search (DeviceShared heap): %d players, %d empty slots, %d other pocket matches, %lu ms", s_nplayers, empty, s_ncand, (nn_os_GetSystemTick()-t0)/19200);
+    }
     if(s_nplayers){
         /* default to the player with the most copies in memory: that is the one being played.
            A tie goes to the lowest PlayerID, so the guess does not depend on where memory landed. */
@@ -330,38 +348,42 @@ static void find_main(void){
     const u32* ph=s_ph;
     int need_hdr = ph[0]==0xA0002 && ph[1]==0xA0028;
     aden_log("personal header %x %x %x %x -> %s", ph[0],ph[1],ph[2],ph[3], need_hdr?"using header check":"no header, using layout check");
-    uptr a=0; MemoryInfo mi; u32 pi; int hits=0; u64 t0=nn_os_GetSystemTick();
-    while(a<0x8000000000ul && nmb<4){
-        if(svcQueryMemory(&mi,&pi,a)||mi.size==0) break;
-        uptr end=mi.addr+mi.size;
-        /* only ordinary game heap (type 5), same as the player search; other memory
-           (graphics, shared, transfer buffers) can disappear under us */
-        if((mi.perm&3)==3 && mi.type==5 && MI_PLAIN(mi) && mi.size>=0x1000){
-            for(uptr x=mi.addr; x+24<=end; x+=4){
-                if(!(x&(SCAN_CHUNK-1)) && (!scan_nap(x,&end) || x+24>end)) break;
-                if(*(u32*)x!=tid || memcmp((void*)x,town,24)) continue;
-                hits++;
-                uptr M=x-(MAIN_VILL+4);
-                if(!heap_rw(M,MAIN_SIZE)) continue;
-                u8 sp=*(u8*)(M+MAIN_VILL);
-                if(sp>35 || !kabu_ok(M+MAIN_KABU)) continue;
-                if(need_hdr){ const u32* h=(const u32*)M; if(h[0]!=ph[0]||h[1]!=ph[1]||h[3]!=ph[3]) continue; }
-                else {
-                    /* no header: the slot before villager 0 must not look like a villager,
-                       and villager 0's own record must start with a valid species/variant */
-                    uptr prev=M+MAIN_VILL-VILL_SIZE+4;
-                    if(heap_rw(prev,24) && memcmp((void*)prev,town,24)==0) continue;
-                    if(*(u8*)(M+MAIN_VILL+1)>40) continue;
-                    if(*(u32*)(M+MAIN_KABU)==0 && *(u32*)(M+MAIN_KABU+4)==0) continue;
+    int hits=0; u64 t0=nn_os_GetSystemTick();
+    /* plain heap first, then the DeviceShared heap if no island save was found (as in the player search) */
+    for(int dev=0; dev<2 && !nmb; dev++){
+        uptr a=0; MemoryInfo mi; u32 pi;
+        while(a<0x8000000000ul && nmb<4){
+            if(svcQueryMemory(&mi,&pi,a)||mi.size==0) break;
+            uptr end=mi.addr+mi.size;
+            /* only ordinary game heap (type 5), same as the player search; other memory
+               (graphics, shared, transfer buffers) can disappear under us */
+            if(scan_ok(&mi,dev)){
+                for(uptr x=mi.addr; x+24<=end; x+=4){
+                    if(!(x&(SCAN_CHUNK-1)) && (!scan_nap(x,&end,dev) || x+24>end)) break;
+                    if(*(u32*)x!=tid || memcmp((void*)x,town,24)) continue;
+                    hits++;
+                    uptr M=x-(MAIN_VILL+4);
+                    if(!heap_rw(M,MAIN_SIZE)) continue;
+                    u8 sp=*(u8*)(M+MAIN_VILL);
+                    if(sp>35 || !kabu_ok(M+MAIN_KABU)) continue;
+                    if(need_hdr){ const u32* h=(const u32*)M; if(h[0]!=ph[0]||h[1]!=ph[1]||h[3]!=ph[3]) continue; }
+                    else {
+                        /* no header: the slot before villager 0 must not look like a villager,
+                           and villager 0's own record must start with a valid species/variant */
+                        uptr prev=M+MAIN_VILL-VILL_SIZE+4;
+                        if(heap_rw(prev,24) && memcmp((void*)prev,town,24)==0) continue;
+                        if(*(u8*)(M+MAIN_VILL+1)>40) continue;
+                        if(*(u32*)(M+MAIN_KABU)==0 && *(u32*)(M+MAIN_KABU+4)==0) continue;
+                    }
+                    int dup=0; for(int j=0;j<nmb;j++) if(mb[j]==M) dup=1; if(dup) continue;
+                    mb[nmb++]=M;
+                    const u8* h=(const u8*)M;
+                    aden_log("island save %d at %lx, header %02x%02x%02x%02x %02x%02x%02x%02x, turnips buy %u", nmb, M, h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7], *(u32*)(M+MAIN_KABU));
+                    if(nmb>=4) break;
                 }
-                int dup=0; for(int j=0;j<nmb;j++) if(mb[j]==M) dup=1; if(dup) continue;
-                mb[nmb++]=M;
-                const u8* h=(const u8*)M;
-                aden_log("island save %d at %lx, header %02x%02x%02x%02x %02x%02x%02x%02x, turnips buy %u", nmb, M, h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7], *(u32*)(M+MAIN_KABU));
-                if(nmb>=4) break;
             }
+            a=end;
         }
-        a=end;
     }
     aden_log("island search: %d town-id hits, %d saves, %lu ms", hits, nmb, (nn_os_GetSystemTick()-t0)/19200);
     /* the render thread leaves s_mb alone while we run, so we are its only writer here */
