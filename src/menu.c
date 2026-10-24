@@ -203,9 +203,17 @@ static int s_was_open, s_armed;
 static int s_grid_on, s_grid_n, s_grid_sel, s_grid_fam[GPAGE];
 static char s_glab[GCOLS][GROWS*(2*GLINE+8)+1];
 static char s_famtxt[24];
-/* split a name over two label lines, at a space or after a hyphen when it can */
+/* copy at most GLINE characters, ending with '.' when the text is cut */
+static void fit(char* o,const char* s,int n){
+    int k=0; for(;k<n && k<GLINE;k++) o[k]=s[k];
+    if(n>GLINE) o[GLINE-1]='.';
+    o[k]=0;
+}
+/* split a name over two label lines: "base (Variant)" keeps the variant on line 2,
+   other names break at a space or after a hyphen when they can */
 static void wrap2(const char* s,char* a,char* b){
     int n=(int)strlen(s), cut=n;
+    for(int i=0;i+1<n;i++) if(s[i]==' ' && s[i+1]=='(' && s[n-1]==')'){ fit(a,s,i); fit(b,s+i+2,n-i-3); return; }
     if(n>GLINE){ cut=GLINE; for(int i=GLINE;i>0;i--){ if(s[i]==' '){ cut=i; break; } if(s[i-1]=='-'){ cut=i; break; } } }
     int k=0; for(;k<cut;k++) a[k]=s[k]; a[k]=0;
     const char* r=s+cut; while(*r==' ') r++;
@@ -482,7 +490,7 @@ static void draw_chrome(void){
         if(s_hl_key>=0) gfx_rrect(TX+s_hl_key*24-2,CY-s_hl_row*20+3,28,22,11,C_PILL);
         else            gfx_rrect(PX0+16,CY-s_hl_row*20+3,PW-32,22,11,C_PILL);
     }
-    gfx_rect(PX0+20,CY-25*20+6,PW-40,2,C_LINE);          /* footer divider */
+    if(!s_grid_on) gfx_rect(PX0+20,CY-25*20+6,PW-40,2,C_LINE);   /* footer divider (the grid fills that space) */
 }
 /* two prints for the whole tab row: the inactive names (and L/R) padded with spaces, then the active one */
 static void draw_tabs_text(void){
