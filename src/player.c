@@ -1,9 +1,10 @@
 #include "nn.h"
 /* Player data (ACNH 3.0.2). Layout found by memory analysis:
-     P-0xB8 : pocket 2, 20 slots (only the first size-20 are unlocked by the bag upgrades)
+     P-0xB8 : pocket 2, 20 slots, then at P-0x18 its u32 count (0, 10 or 20: the bag upgrades) and 5 x 0xFFFFFFFF
      P      : pocket 1, 20 slots of { u16 id; u8 sys; u8 add; u32 param }  (empty id = 0xFFFE)
-     P+0xA0 : u32 pocket size (20, 30 or 40), then 5 x 0xFFFFFFFF
-              slots 0-19 are at P, slots 20..size-1 at P-0xB8
+     P+0xA0 : u32 pocket 1 count (20), then 20 bytes that are not always 0xFF
+              (a 3.0.3 save with the first upgrade: pocket 2 count 10, then 03 01 02 ff 00 ff ...)
+              slots 0-19 are at P, slots 20..size-1 at P-0xB8 (see pocket_size)
      P+0xB8 : wallet Bells as EncryptedInt32 { u32 enc; u16 adjust; u8 shift; u8 checksum }
    The game keeps several copies (live + save buffers); we update all of them.
    Copies are kept in address order, so the cap must stay well above what the game makes:
@@ -59,12 +60,20 @@ static int slot_ok(const u8* p){
     if(id==0xFFFE) return *(const u16*)(p+2)==0 && *(const u32*)(p+4)==0;
     return id<0xFFFE;   /* newer ids may be missing from our name list */
 }
+static int count2_ok(u32 n){ return n==0 || n==10 || n==20; }
 static int sig_ok(uptr P){
-    if(*(u32*)(P-0x18)!=0) return 0;
-    for(int i=0;i<5;i++) if(*(u32*)(P-0x14+i*4)!=0xFFFFFFFF || *(u32*)(P+0xA4+i*4)!=0xFFFFFFFF) return 0;
+    if(!count2_ok(*(u32*)(P-0x18))) return 0;
+    for(int i=0;i<5;i++) if(*(u32*)(P-0x14+i*4)!=0xFFFFFFFF) return 0;
     u32 n=*(u32*)(P+0xA0); if(n!=20 && n!=30 && n!=40) return 0;
     for(int i=0;i<20;i++) if(!slot_ok((u8*)(P+i*8))) return 0;
     return enc_valid((EncInt*)(P+0xB8));
+}
+/* usable slots: 20 in pocket 1 plus the pocket 2 count. Older builds read a 30/40 total
+   at P+0xA0 with a zero pocket 2 count; both forms are accepted. */
+static u32 pocket_size(uptr P){
+    u32 c1=*(u32*)(P+0xA0), c2=*(u32*)(P-0x18);
+    if(!c2 && c1>20) c2=c1-20;
+    return 20+(c2>20?20:c2);
 }
 static int has_stuff(uptr P){
     if(enc_get((EncInt*)(P+0xB8))) return 1;
@@ -150,7 +159,7 @@ static void find_thread(void* arg){
         if((mi.perm&3)==3 && mi.type==5 && MI_PLAIN(mi) && mi.size>=0x1000){
             for(uptr P=mi.addr+0x20; P+0xC0<end; P+=8){
                 if(!(P&(SCAN_CHUNK-1)) && (!scan_nap(P,&end) || P+0xC0>=end)) break;
-                if(*(u32*)(P-4)!=0xFFFFFFFF || *(u32*)(P-0x18)!=0) continue;
+                if(*(u32*)(P-4)!=0xFFFFFFFF || !count2_ok(*(u32*)(P-0x18))) continue;
                 if(!sig_ok(P)) continue;
                 if(base_ok(P)){
                     u32 pid=*(u32*)(P-PERS_P+PERS_ID_PID);
@@ -240,9 +249,9 @@ void aden_wallet_set(u32 v){
 /* >= 0 items placed, -1 player data not ready, -2 pockets look wrong (nothing written) */
 int aden_pocket_add(u16 id, int qty, int stack){
     if(!aden_player_ready()) return -1;   /* also checks every copy is still mapped and valid */
-    uptr P=s_copy[0]; u32 size=*(u32*)(P+0xA0);
+    uptr P=s_copy[0]; u32 size=pocket_size(P);
     /* a copy may still hold the size from before an upgrade: never fill a slot locked in any copy */
-    for(int c=1;c<s_ncopies;c++){ u32 z=*(u32*)(s_copy[c]+0xA0); if(z<size) size=z; }
+    for(int c=1;c<s_ncopies;c++){ u32 z=pocket_size(s_copy[c]); if(z<size) size=z; }
     /* sig_ok covers slots 0-19; the unlocked part of pocket 2 must look like items too */
     for(int c=0;c<s_ncopies;c++) for(u32 i=20;i<size && i<40;i++) if(!slot_ok((u8*)(s_copy[c]-0xB8+(i-20)*8))){
         aden_log("pocket copy %d slot %u looks wrong, not touching pockets", c, i); return -2; }
@@ -509,11 +518,13 @@ int aden_storage_free(void){
 }
 
 /* ---- turnips ---- */
-u32 aden_turnip_sell(void){ return s_nmb && heap_rw(s_mb[0]+MAIN_KABU,8) ? *(u32*)(s_mb[0]+MAIN_KABU+4) : 0; }
+/* MAIN_KABU: u32 buy price, then 14 sell prices (Sunday AM/PM, which the game keeps at 0, then Monday AM .. Saturday PM) */
+#define KABU_MON 3
+u32 aden_turnip_sell(void){ return s_nmb && heap_rw(s_mb[0]+MAIN_KABU,16) ? *(u32*)(s_mb[0]+MAIN_KABU+KABU_MON*4) : 0; }
 u32 aden_turnip_buy(void){ return s_nmb && heap_rw(s_mb[0]+MAIN_KABU,8) ? *(u32*)(s_mb[0]+MAIN_KABU) : 0; }
 void aden_turnip_set(int sell,u32 v){
     for(int c=0;c<s_nmb;c++){ u32* k=(u32*)(s_mb[c]+MAIN_KABU); if(!heap_rw((uptr)k,15*4)) continue;
-        if(sell) for(int i=1;i<15;i++) k[i]=v; else k[0]=v; }
+        if(sell) for(int i=KABU_MON;i<15;i++) k[i]=v; else k[0]=v; }
     aden_log("turnip %s price set to %u", sell?"sell":"buy", v);
 }
 
