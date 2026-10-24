@@ -1,4 +1,5 @@
-# On a v* tag: builds subsdk9 and uploads AdenModmenu-<tag>.zip (drag-and-drop load/ and sdmc/ folders) to the release.
+# On a v* tag: builds subsdk9 and uploads AdenModmenu-<tag>.zip (README.txt + drag-and-drop load/ and sdmc/ folders,
+# with the game files from the private draft release "game-files") to the release.
 name: release
 
 on:
@@ -47,13 +48,27 @@ jobs:
       - name: Build subsdk9
         run: ELF2NSO=~/elf2nso/elf2nso ./build.sh
 
+      - name: Fetch game files
+        # game-derived files (main.npdm, items.txt, sdmc/aden/romfs) live in the private draft release "game-files"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rid=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq '.[]|select(.draft and .tag_name=="game-files")|.id')
+          aid=$(gh api "repos/$GITHUB_REPOSITORY/releases/$rid/assets" --jq '.[]|select(.name=="gamefiles.zip")|.id')
+          [ -n "$aid" ] || { echo "draft release game-files with gamefiles.zip not found"; exit 1; }
+          gh api -H "Accept: application/octet-stream" "repos/$GITHUB_REPOSITORY/releases/assets/$aid" > "$RUNNER_TEMP/gamefiles.zip"
+          mkdir -p "$RUNNER_TEMP/game" && unzip -q "$RUNNER_TEMP/gamefiles.zip" -d "$RUNNER_TEMP/game"
+
       - name: Make the zip
         run: |
-          root="$RUNNER_TEMP/pkg"
+          root="$RUNNER_TEMP/pkg"; game="$RUNNER_TEMP/game"
           mkdir -p "$root/load/$TITLE_ID/AdenModmenu/exefs" "$root/sdmc/aden/mods"
-          cp out/subsdk9 "$root/load/$TITLE_ID/AdenModmenu/exefs/"
+          cp out/subsdk9 "$game/exefs/main.npdm" "$root/load/$TITLE_ID/AdenModmenu/exefs/"
+          cp -r "$game/sdmc/aden/." "$root/sdmc/aden/"
+          ver=$(sed -n 's/^#define ADEN_VERSION "\(.*\)".*/\1/p' src/aden.h)
+          sed "s/@VERSION@/$ver/" packaging/README.txt > "$root/README.txt"
           printf 'Put romfs mods here: sdmc/aden/mods/<name>/romfs/...\nTurn them on or off in the Mods tab.\n' > "$root/sdmc/aden/mods/README.txt"
-          cd "$root" && zip -r "$GITHUB_WORKSPACE/AdenModmenu-$GITHUB_REF_NAME.zip" load sdmc
+          cd "$root" && zip -r "$GITHUB_WORKSPACE/AdenModmenu-$GITHUB_REF_NAME.zip" README.txt load sdmc
 
       - name: Upload to the release
         env:
