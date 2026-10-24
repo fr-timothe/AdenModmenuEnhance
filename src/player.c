@@ -518,11 +518,13 @@ int aden_storage_free(void){
 }
 
 /* ---- turnips ---- */
-u32 aden_turnip_sell(void){ return s_nmb && heap_rw(s_mb[0]+MAIN_KABU,8) ? *(u32*)(s_mb[0]+MAIN_KABU+4) : 0; }
+/* MAIN_KABU: u32 buy price, then 14 sell prices (Sunday AM/PM, which the game keeps at 0, then Monday AM .. Saturday PM) */
+#define KABU_MON 3
+u32 aden_turnip_sell(void){ return s_nmb && heap_rw(s_mb[0]+MAIN_KABU,16) ? *(u32*)(s_mb[0]+MAIN_KABU+KABU_MON*4) : 0; }
 u32 aden_turnip_buy(void){ return s_nmb && heap_rw(s_mb[0]+MAIN_KABU,8) ? *(u32*)(s_mb[0]+MAIN_KABU) : 0; }
 void aden_turnip_set(int sell,u32 v){
     for(int c=0;c<s_nmb;c++){ u32* k=(u32*)(s_mb[c]+MAIN_KABU); if(!heap_rw((uptr)k,15*4)) continue;
-        if(sell) for(int i=1;i<15;i++) k[i]=v; else k[0]=v; }
+        if(sell) for(int i=KABU_MON;i<15;i++) k[i]=v; else k[0]=v; }
     aden_log("turnip %s price set to %u", sell?"sell":"buy", v);
 }
 
