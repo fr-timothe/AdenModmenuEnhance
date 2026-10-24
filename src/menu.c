@@ -4,6 +4,7 @@ void gfx_text(float x, float y, float scale, u32 rgba, const char* s);
 void gfx_prim_begin(void);
 void gfx_rect(float x,float y,float w,float h,u32 rgba);
 void gfx_rrect(float x,float y,float w,float h,float r,u32 rgba);
+void gfx_disk(float cx,float cy,float r,u32 rgba);
 static int s_hl_row=-1, s_hl_key=-1;   /* highlight pill: content row, keyboard column */
 u64  aden_input_take(void);
 int aden_player_ready(void); int aden_player_copies(void); void aden_player_find(void);
@@ -82,16 +83,27 @@ static int pr(u64 m){ return (s_press&m)!=0; }
 static int up(void){ return pr(B_UP|S_UP); } static int down(void){ return pr(B_DOWN|S_DOWN); }
 static int left(void){ return pr(B_LEFT|S_LEFT); } static int right(void){ return pr(B_RIGHT|S_RIGHT); }
 
-/* ---------- item database (sd:/aden/items.txt) ---------- */
-typedef struct { u16 id; u16 stack; const char* cat; const char* name; } Item;
+/* ---------- item database (sd:/aden/items.txt) ----------
+   columns: hex id, category, name, max stack, family (F C N M O), dlc (- H P S); the last three are optional */
+typedef struct { u16 id; u16 stack; const char* cat; const char* name; char fam, dlc; } Item;
 static Item* s_items; static int s_nitems; static int s_items_loaded; static char* s_itembuf;
+/* add-on content the player owns: Happy Home Paradise (index 1000), Pocket Camp ticket (300), Switch Online items (301) */
+static int s_own_h, s_own_p, s_own_s;
+static void check_dlc(void){
+    int n=nn_aoc_CountAddOnContent(), idx[32], k= n>0 ? nn_aoc_ListAddOnContent(idx,0,n<32?n:32) : 0;
+    for(int i=0;i<k;i++){ if(idx[i]==1000) s_own_h=1; if(idx[i]==300) s_own_p=1; if(idx[i]==301) s_own_s=1;
+        aden_log("add-on content index %d", idx[i]); }
+    aden_log("add-on content: %d owned (Happy Home Paradise %d, Pocket Camp %d, Switch Online items %d)", n, s_own_h, s_own_p, s_own_s);
+}
+static int dlc_ok(char d){ return d=='H' ? s_own_h : d=='P' ? s_own_p : d=='S' ? s_own_s : 1; }
 static void load_items(void){
     s_items_loaded=1;
+    check_dlc();
     FsFile f; if(nn_fs_OpenFile(&f,"adensd:/aden/items.txt",FS_READ)){ aden_log("items.txt missing"); return; }
     s64 sz=0; nn_fs_GetFileSize(&sz,f);
     s_itembuf=malloc(sz+1); if(!s_itembuf){ nn_fs_CloseFile(f); return; }
     nn_fs_ReadFile(f,0,s_itembuf,sz); nn_fs_CloseFile(f); s_itembuf[sz]=0;
-    int lines=0; for(s64 i=0;i<sz;i++) if(s_itembuf[i]=='\n') lines++;
+    int lines=0, hidden=0; for(s64 i=0;i<sz;i++) if(s_itembuf[i]=='\n') lines++;
     s_items=malloc(sizeof(Item)*(lines+1));
     char* p=s_itembuf;
     while(*p){
@@ -99,13 +111,16 @@ static void load_items(void){
         char* line=p; p=*nl?nl+1:nl; *nl=0;
         if(nl>line && nl[-1]=='\r') nl[-1]=0;   /* CRLF files */
         if(line[0]=='#'||!line[0]) continue;
-        char* t1=line; while(*t1 && *t1!='\t') t1++; if(!*t1) continue; *t1++=0;
-        char* t2=t1; while(*t2 && *t2!='\t') t2++; if(!*t2) continue; *t2++=0;
-        char* t3=t2; while(*t3 && *t3!='\t') t3++; int st=1; if(*t3){ *t3++=0; st=0; while(*t3>='0'&&*t3<='9') st=st*10+(*t3++-'0'); if(st<1) st=1; }
+        char* fl[6]; int nf=0; char* q=line;
+        while(nf<6){ fl[nf++]=q; while(*q && *q!='\t') q++; if(!*q) break; *q++=0; }
+        if(nf<3) continue;
+        int st=1; if(nf>3){ st=0; for(char* d=fl[3];*d>='0'&&*d<='9';d++) st=st*10+(*d-'0'); if(st<1) st=1; }
+        char fam= nf>4 && fl[4][0] ? fl[4][0] : 'O', dl= nf>5 && fl[5][0] ? fl[5][0] : '-';
+        if(!dlc_ok(dl)){ hidden++; continue; }   /* items from DLC the player does not own are never listed */
         u32 id=0; for(char* h=line;*h;h++){ id<<=4; id|= (*h<='9')?*h-'0':((*h|32)-'a'+10); }
-        s_items[s_nitems++]=(Item){(u16)id,(u16)st,t1,t2};
+        s_items[s_nitems++]=(Item){(u16)id,(u16)st,fl[1],fl[2],fam,dl};
     }
-    aden_log("loaded %d items", s_nitems);
+    aden_log("loaded %d items, %d hidden (DLC not owned)", s_nitems, hidden);
 }
 /* search */
 static char s_query[24]; static int s_qlen;
@@ -122,10 +137,17 @@ static const char* needs_param(u16 id){
     if(id==0x16A1) return "Message bottles need a recipe ID - nothing was added";
     return 0;
 }
+/* Items tab family filter (ZL/ZR): codes from items.txt column 5 */
+#define NFAM 6
+static const char  FAMC[NFAM]={0,'F','C','N','M','O'};
+static const char* FAMN[NFAM]={"All","Furniture","Clothing","Nature","Materials","Other"};
+static const u32   FAMCOL[NFAM]={0xA39380FF,0xE0A24AFF,0xE07A9BFF,0x7DBF5AFF,0x9C7A55FF,0xA39380FF};
+static int s_fam;
+static int fam_idx(char c){ for(int i=1;i<NFAM;i++) if(FAMC[i]==c) return i; return NFAM-1; }
 static void refilter(void){
     if(!s_match) s_match=malloc(sizeof(int)*(s_nitems+1));
     s_nmatch=0;
-    for(int i=0;i<s_nitems;i++) if(contains(s_items[i].name,s_query)) s_match[s_nmatch++]=i;
+    for(int i=0;i<s_nitems;i++) if((!s_fam || s_items[i].fam==FAMC[s_fam]) && contains(s_items[i].name,s_query)) s_match[s_nmatch++]=i;
 }
 
 /* ---------- mods: folders in sd:/aden/mods, on/off kept in sd:/aden/mods_on.txt ---------- */
@@ -171,13 +193,42 @@ static int s_was_open, s_armed;
 #define LIST 18
 #define MODLIST 17   /* mod rows that fit above the message line */
 
+/* pocket-style grid: GCOLS x GROWS tiles per page. tab_items fills the tile state, draw_grid
+   draws the tiles (primitives) and draw_grid_text the labels: one print per column, since the
+   debug font allows only 16 prints per frame. */
+#define GCOLS 5
+#define GROWS 4
+#define GPAGE (GCOLS*GROWS)
+#define GLINE 11                   /* label characters per line (tile width / 8) */
+static int s_grid_on, s_grid_n, s_grid_sel, s_grid_fam[GPAGE];
+static char s_glab[GCOLS][GROWS*(2*GLINE+8)+1];
+static char s_famtxt[24];
+/* copy at most GLINE characters, ending with '.' when the text is cut */
+static void fit(char* o,const char* s,int n){
+    int k=0; for(;k<n && k<GLINE;k++) o[k]=s[k];
+    if(n>GLINE) o[GLINE-1]='.';
+    o[k]=0;
+}
+/* split a name over two label lines: "base (Variant)" keeps the variant on line 2,
+   other names break at a space or after a hyphen when they can */
+static void wrap2(const char* s,char* a,char* b){
+    int n=(int)strlen(s), cut=n;
+    for(int i=0;i+1<n;i++) if(s[i]==' ' && s[i+1]=='(' && s[n-1]==')'){ fit(a,s,i); fit(b,s+i+2,n-i-3); return; }
+    if(n>GLINE){ cut=GLINE; for(int i=GLINE;i>0;i--){ if(s[i]==' '){ cut=i; break; } if(s[i-1]=='-'){ cut=i; break; } } }
+    int k=0; for(;k<cut;k++) a[k]=s[k]; a[k]=0;
+    const char* r=s+cut; while(*r==' ') r++;
+    int m=(int)strlen(r); for(k=0;k<m && k<GLINE;k++) b[k]=r[k];
+    if(m>GLINE) b[GLINE-1]='.';
+    b[k]=0;
+}
 static void tab_items(void){
     if(!s_items_loaded) load_items();
     if(!s_match) refilter();
     if(g_player_state==0) aden_player_find();   /* spawning needs the player data */
     if(!s_nitems){ text(ROW0,C_WARN,"items.txt not found on SD card"); text(ROW0+1,C_DIM,"put it in sdmc/aden/items.txt"); return; }
-    int* cur=&s_cur[TAB_ITEMS]; int* top=&s_top[TAB_ITEMS];
-    put(ROW0,0,C_TEXT,"Search: %s%s      (%d found)", s_query, s_typing?"_":"", s_nmatch);
+    int* cur=&s_cur[TAB_ITEMS];
+    if(*cur>s_nmatch-1) *cur= s_nmatch>0 ? s_nmatch-1 : 0;
+    put(ROW0,0,C_TEXT,"Search: %s%s   %d found", s_query, s_typing?"_":"", s_nmatch);
     if(s_typing){
         for(int r=0;r<4;r++){
             char b[72]; int n=0;
@@ -189,38 +240,46 @@ static void tab_items(void){
         text(ROW0+7,C_DIM,"A type   Y delete   X clear   B done");
         if(up()) s_ky=(s_ky+3)%4; if(down()) s_ky=(s_ky+1)%4;
         if(left()) s_kx=(s_kx+9)%10; if(right()) s_kx=(s_kx+1)%10;
-        if(pr(B_A) && s_qlen<22){ s_query[s_qlen++]=KEYS[s_ky][s_kx]; s_query[s_qlen]=0; refilter(); *cur=*top=0; }
-        if(pr(B_Y) && s_qlen>0){ s_query[--s_qlen]=0; refilter(); *cur=*top=0; }
-        if(pr(B_X)){ s_qlen=0; s_query[0]=0; refilter(); *cur=*top=0; }
+        if(pr(B_A) && s_qlen<22){ s_query[s_qlen++]=KEYS[s_ky][s_kx]; s_query[s_qlen]=0; refilter(); *cur=0; }
+        if(pr(B_Y) && s_qlen>0){ s_query[--s_qlen]=0; refilter(); *cur=0; }
+        if(pr(B_X)){ s_qlen=0; s_query[0]=0; refilter(); *cur=0; }
         if(pr(B_B)||pr(B_PLUS)){ s_typing=0; s_press&=~(u64)(B_B|B_PLUS); }  /* B only leaves the keyboard */
         return;
     }
-    if(up() && *cur>0) (*cur)--; if(down() && *cur<s_nmatch-1) (*cur)++;
-    if(left()) { *cur-=LIST; if(*cur<0)*cur=0; } if(right()) { *cur+=LIST; if(*cur>s_nmatch-1)*cur=s_nmatch-1; }
+    /* move in the grid; going past the first or last row turns the page */
+    if(left()  && *cur>0) (*cur)--;
+    if(right() && *cur<s_nmatch-1) (*cur)++;
+    if(up()    && *cur>=GCOLS) *cur-=GCOLS;
+    if(down()){ if(*cur+GCOLS<s_nmatch) *cur+=GCOLS; else if(*cur/GCOLS<(s_nmatch-1)/GCOLS) *cur=s_nmatch-1; }
+    if(pr(B_ZL)){ s_fam=(s_fam+NFAM-1)%NFAM; refilter(); *cur=0; }
+    if(pr(B_ZR)){ s_fam=(s_fam+1)%NFAM; refilter(); *cur=0; }
     /* stackables go up to 40 full slots, the rest to 99; s_qty keeps the asked amount across items */
     Item* si= s_nmatch ? &s_items[s_match[*cur]] : 0;
     int mx= si && si->stack>1 ? 40*si->stack : 99, q= s_qty>mx ? mx : s_qty;
-    if(pr(B_ZL) && q>1)  s_qty = q>100 ? q-100 : q>10 ? q-10 : q-1;
-    if(pr(B_ZR) && q<mx){ s_qty = q>=100 ? q+100 : q>=10 ? q+10 : q+1; if(s_qty>mx) s_qty=mx; }
+    if(pr(B_MINUS) && q>1)  s_qty = q>100 ? q-100 : q>10 ? q-10 : q-1;
+    if(pr(B_PLUS)  && q<mx){ s_qty = q>=100 ? q+100 : q>=10 ? q+10 : q+1; if(s_qty>mx) s_qty=mx; }
     q= s_qty>mx ? mx : s_qty;
     if(pr(B_Y)) { s_typing=1; return; }
-    if(*cur<*top) *top=*cur; if(*cur>=*top+LIST) *top=*cur-LIST+1;
-    for(int i=0;i<LIST && *top+i<s_nmatch;i++){
-        Item* it=&s_items[s_match[*top+i]]; int sel=(*top+i==*cur);
-        /* one print per row: name padded to a column, then id and category */
-        char nm[40]; int k=0; for(;it->name[k]&&k<38;k++) nm[k]=it->name[k]; for(;k<38;k++) nm[k]=' '; nm[38]=0;
-        put(ROW0+2+i,0,C_TEXT,"%s %04X %s",nm,it->id,it->cat);
-        if(sel) s_hl_row=ROW0+2+i;
+    /* tiles of the current page */
+    int top=(*cur/GPAGE)*GPAGE, pages=(s_nmatch+GPAGE-1)/GPAGE;
+    s_grid_on=1; s_grid_sel=*cur-top; s_grid_n=0;
+    char la[GPAGE][GLINE+1], lb[GPAGE][GLINE+1];
+    for(int i=0;i<GPAGE && top+i<s_nmatch;i++){ Item* it=&s_items[s_match[top+i]]; s_grid_fam[i]=fam_idx(it->fam); wrap2(it->name,la[i],lb[i]); s_grid_n++; }
+    for(int c=0;c<GCOLS;c++){
+        char* o=s_glab[c]; int n=0, cap=(int)sizeof s_glab[c];
+        for(int r=0;r<GROWS;r++){ int i=r*GCOLS+c;
+            n+=aden_snprintf(o+n,cap-n,"%s\n%s\n\n\n\n", i<s_grid_n?la[i]:"", i<s_grid_n?lb[i]:""); }
     }
-    if(si && needs_param(si->id)) text(ROW0+LIST+3,C_DIM,"Needs a recipe ID - cannot be spawned here");
-    else put(ROW0+LIST+3,0,C_TEXT,"Amount: %d (max %d)   Send to: %s",q,mx,s_to_storage?"home storage":"pockets");
-    text(26,C_DIM,"A spawn  X pockets/storage  Y search  ZL/ZR amount  - rescan");
-    /* who receives spawned items; Minus redoes the player search (not while the island thread reads the copies) */
-    if(pr(B_MINUS) && g_player_state!=1 && g_island_state!=1){ s_status[0]=0; g_player_state=0; g_island_state=0; aden_player_find(); }
-    if(g_player_state==2){ const char* nm=aden_player_name(aden_player_active());
-        put(ROW0+LIST+5,0,C_DIM,"Items go to: %s   (%d copies%s)",nm[0]?nm:"your character",aden_player_copies(),aden_player_count()>1?", change in Player tab":""); }
-    if(g_player_state<2) text(ROW0+LIST+5,C_DIM,"Finding your player data...");
-    if(g_player_state==3){ text(ROW0+LIST+5,C_WARN,"Player data not found - press A to search again");
+    aden_snprintf(s_famtxt,sizeof s_famtxt,"< %s >",FAMN[s_fam]);
+    if(si) put(ROW0+23,0,C_TEXT,"%s   (%04X, page %d/%d)",si->name,si->id,top/GPAGE+1,pages);
+    else   text(ROW0+23,C_DIM,"Nothing found - change the search or the family (ZL/ZR)");
+    text(26,C_DIM,"A give  Y search  ZL/ZR family  -/+ amount  X send to");
+    if(si && needs_param(si->id)) text(ROW0+24,C_DIM,"Needs a recipe ID - cannot be spawned here");
+    else if(g_player_state==2){ const char* nm=aden_player_name(aden_player_active());
+        put(ROW0+24,0,C_TEXT,"Amount: %d (max %d)   To: %s of %s",q,mx,s_to_storage?"home storage":"pockets",nm[0]?nm:"you"); }
+    else put(ROW0+24,0,C_TEXT,"Amount: %d (max %d)   To: %s",q,mx,s_to_storage?"home storage":"pockets");
+    if(g_player_state<2 && !s_status[0]) text(ROW0+22,C_DIM,"Finding your player data...");
+    if(g_player_state==3){ if(!s_status[0]) text(ROW0+22,C_WARN,"Player data not found - press A to search again");
         if(pr(B_A)){ s_status[0]=0; aden_player_find(); return; } }   /* A retries instead of spawning */
     if(pr(B_X)) s_to_storage=!s_to_storage;
     if(pr(B_A) && s_nmatch){
@@ -242,6 +301,9 @@ static void tab_player(void){
     if(g_player_state==1){ text(ROW0,C_TEXT,"Character stats"); text(ROW0+2,C_DIM,"Finding your player data..."); return; }
     if(g_player_state==3){ text(ROW0,C_TEXT,"Character stats"); text(ROW0+2,C_WARN,"Could not find player data."); text(ROW0+3,C_DIM,"Press A to search again."); if(pr(B_A)) g_player_state=0; return; }
     if(!aden_player_ready()){ text(ROW0+2,C_DIM,"Finding your player data..."); return; }
+    /* Minus redoes the player search (not while the island thread reads the copies) */
+    if(pr(B_MINUS) && g_island_state!=1){ s_status[0]=0; g_player_state=0; g_island_state=0; aden_player_find(); return; }
+    text(26,C_DIM,"- search player data again (after switching resident)");
     char pn[24],tn[24]; aden_player_names(pn,tn,sizeof pn);
     if(pn[0]) put(ROW0,0,C_TEXT,"%s of %s",pn,tn); else text(ROW0,C_TEXT,"Character stats");
     enum { R_BELLS, R_MILES, R_BANK, R_POKI, R_RECIPES, R_REACT, R_BAGS, NROWS };
@@ -390,35 +452,57 @@ static void tab_about(void){
 #define HEADH 100.f
 #define TX   (PX0+30.f)
 #define CY   (PY0-HEADH-16.f)
+#define TABX0 (TX+8.f)      /* x of the first tab name */
 
+/* grid geometry, panel coordinates (x right from PX0, y down from PY0) */
+#define GX0   40.f
+#define GY0   152.f
+#define GTILE 90.f
+#define GPITCH 100.f        /* 5 label lines of 20 px: one print per column lines up with every row */
+#define C_TILE 0xEFE7D2FF
+static void draw_grid(void){
+    gfx_rrect(PX0+20,PY0-110,350,36,18,0xFFFFFFFF);           /* search bar */
+    gfx_rrect(PX0+382,PY0-110,168,36,18,C_HEAD);              /* family filter pill */
+    for(int i=0;i<s_grid_n;i++){
+        float x=PX0+GX0+(i%GCOLS)*GPITCH, y=PY0-GY0-(i/GCOLS)*GPITCH;
+        if(i==s_grid_sel) gfx_rrect(x-5,y+5,GTILE+10,GTILE+10,22,C_PILL);
+        gfx_rect(x,y,GTILE,GTILE,C_TILE);
+        gfx_disk(x+GTILE*0.5f,y-27,15,FAMCOL[s_grid_fam[i]]);  /* family colour, until real item icons */
+    }
+}
+static void draw_grid_text(void){
+    for(int c=0;c<GCOLS;c++) gfx_text(PX0+GX0+c*GPITCH+1,PY0-GY0-50,1.0f,C_TEXT,s_glab[c]);
+    gfx_text(PX0+466-strlen(s_famtxt)*4.f,PY0-118,1.0f,0xFFFFFFFF,s_famtxt);
+}
 static void draw_chrome(void){
     gfx_prim_begin();
     gfx_rrect(PX0,PY0,PW,PH,34,C_PANEL);                 /* cream card */
     gfx_rrect(PX0,PY0,PW,HEADH,34,C_HEAD);               /* teal header */
     gfx_rect(PX0,PY0-HEADH+34,PW,34,C_HEAD);             /* square off its lower corners */
-    /* active tab pill */
-    float tx=TX-6;
+    /* active tab pill; tabs sit on the 8 px character grid (see draw_tabs_text) */
+    int pos=0;
     for(int i=0;i<NTABS;i++){
-        float w=strlen(TABNAME[i])*8.f+28;
-        if(i==s_tab) gfx_rrect(tx,PY0-58,w,26,13,0xFFFFFFFF);
-        tx+=w+8;
+        if(i==s_tab) gfx_rrect(TABX0+pos*8.f-14,PY0-58,strlen(TABNAME[i])*8.f+28,26,13,0xFFFFFFFF);
+        pos+=strlen(TABNAME[i])+5;
     }
+    if(s_grid_on) draw_grid();
     if(s_hl_row>=0){
         if(s_hl_key>=0) gfx_rrect(TX+s_hl_key*24-2,CY-s_hl_row*20+3,28,22,11,C_PILL);
         else            gfx_rrect(PX0+16,CY-s_hl_row*20+3,PW-32,22,11,C_PILL);
     }
-    gfx_rect(PX0+20,CY-25*20+6,PW-40,2,C_LINE);          /* footer divider */
+    if(!s_grid_on) gfx_rect(PX0+20,CY-25*20+6,PW-40,2,C_LINE);   /* footer divider (the grid fills that space) */
 }
+/* two prints for the whole tab row: the inactive names (and L/R) padded with spaces, then the active one */
 static void draw_tabs_text(void){
-    float tx=TX-6;
-    for(int i=0;i<NTABS;i++){
-        float w=strlen(TABNAME[i])*8.f+28;
-        gfx_text(tx+14,PY0-63,1.0f,i==s_tab?C_HEADDK:C_TABOFF,TABNAME[i]);
-        tx+=w+8;
-    }
-    gfx_text(PX0+PW-60,PY0-63,1.0f,C_TABOFF,"L/R");
+    char off[80], on[80]; int pos=0;
+    memset(off,' ',sizeof off); memset(on,' ',sizeof on);
+    for(int i=0;i<NTABS;i++){ int n=strlen(TABNAME[i]);
+        memcpy(i==s_tab?on+pos:off+pos,TABNAME[i],n); pos+=n+5; }
+    int lr=(int)((PW-60-(TABX0-PX0))/8); memcpy(off+lr,"L/R",3);
+    off[lr+3]=0; on[pos]=0;
+    gfx_text(TABX0,PY0-63,1.0f,C_TABOFF,off);
+    gfx_text(TABX0,PY0-63,1.0f,C_HEADDK,on);
 }
-
 void aden_menu_draw(void){
     extern volatile int g_aden_open_request;
     if(g_aden_open_request && !g_menu_open){ g_menu_open=1; s_armed=0; }
@@ -432,7 +516,7 @@ void aden_menu_draw(void){
         if(pr(B_L)) s_tab=(s_tab+NTABS-1)%NTABS;
         if(pr(B_R)) s_tab=(s_tab+1)%NTABS;
     }
-    s_hl_row=-1; s_hl_key=-1;
+    s_hl_row=-1; s_hl_key=-1; s_grid_on=0;
     switch(s_tab){
         case TAB_ITEMS:  tab_items(); break;
         case TAB_PLAYER: tab_player(); break;
@@ -445,5 +529,6 @@ void aden_menu_draw(void){
     gfx_text(TX,PY0-18,1.6f,C_TITLE,"Aden Modmenu");
     draw_tabs_text();
     flush(TX,CY);
+    if(s_grid_on) draw_grid_text();
     if(pr(B_B) && !s_typing){ g_input_hold=1; g_menu_open=0; g_aden_open_request=0; s_status[0]=0; aden_log("menu closed"); }
 }

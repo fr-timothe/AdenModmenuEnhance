@@ -40,3 +40,6 @@ int nn_hid_GetNpadStates_JoyLeft (NpadState*, int, const u32*) __asm__("_ZN2nn3h
 int nn_hid_GetNpadStates_JoyRight(NpadState*, int, const u32*) __asm__("_ZN2nn3hid13GetNpadStatesEPNS0_17NpadJoyRightStateEiRKj");
 /* heap (exported by the game's main) */
 void* malloc(size_t); void free(void*);
+/* add-on content (DLC) the user owns: indices relative to the game's first add-on title id */
+int nn_aoc_CountAddOnContent(void)          __asm__("_ZN2nn3aoc17CountAddOnContentEv");
+int nn_aoc_ListAddOnContent(int*, int, int) __asm__("_ZN2nn3aoc16ListAddOnContentEPiii");
