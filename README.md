@@ -18,17 +18,17 @@ Downloads and install instructions are on the GameBanana page.
 
 ## Install on Eden
 
-Each GitHub release has an `AdenModmenu-<version>.zip` with two folders: `load/` and `sdmc/`.
+Each GitHub release has an `AdenModmenu-<version>.zip` with a `README.txt` and two folders, `load/` and `sdmc/`. It is a complete install: `subsdk9`, `main.npdm`, `items.txt`, and the phone app name and icon.
 
 1. Open the Eden user folder: in Eden, **File > Open Eden Folder**. It is usually `%APPDATA%\eden`. A portable Eden uses the `user` folder next to `eden.exe`. The `load` and `sdmc` folders are in there.
 2. Drag the `load` and `sdmc` folders from the zip into the Eden user folder. Merge them with the existing folders when asked.
 3. Start the game.
 
-The zip puts the mod in `load/01006F8002326000/AdenModmenu/exefs/` and creates `sdmc/aden/mods/` (where romfs mods go). To check, right-click Animal Crossing in Eden and choose **Open Mod Data Location**: `AdenModmenu` must be listed.
+The zip puts the mod in `load/01006F8002326000/AdenModmenu/exefs/` and the SD files in `sdmc/aden/` (romfs mods go in `sdmc/aden/mods/`). To check, right-click Animal Crossing in Eden and choose **Open Mod Data Location**: `AdenModmenu` must be listed.
 
-If Aden Modmenu is already installed from GameBanana under another folder name, do not add a second copy. Copy only the new `subsdk9` into that folder's `exefs`, replacing the old one.
+If an older version is installed under another folder name (e.g. `AdenModmenu_v0.5.3`), delete that folder first: two copies of the mod conflict.
 
-The zip has no game files. The SD files from the GameBanana package stay as they are: `items.txt`, plus the phone app name and icon in `sdmc/aden/romfs`. You can also make them from your own dump (see Building).
+The game-derived files (`main.npdm`, `items.txt`, `sdmc/aden/romfs`) are not in this repo. The release workflow takes them from a private draft release named `game-files` (`gamefiles.zip`, with `exefs/` and `sdmc/aden/`). To rebuild them from your own dump, see Building.
 
 ## How it works
 
