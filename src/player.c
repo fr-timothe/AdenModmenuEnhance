@@ -14,10 +14,12 @@ static uptr s_copy[MAXCOPIES]; static int s_ncopies;
 #define PERS_ID_PID (0xC248+0x1C)
 #define MAXCAND 48
 #define MAXPLAYERS 8
-/* plain memory we may read: not Locked (0x1), IpcLocked (0x2) or DeviceShared (0x4).
+/* memory the bulk scans may read: not Locked (0x1) nor DeviceShared (0x4, GPU-mapped). IpcLocked (0x2) is fine:
+   the save data can sit there (beta.1/beta.2 skipped it and found no player).
    Never read GPU-mapped pages: on Eden one CPU read makes reactive flushing copy
    that buffer back from the GPU every frame for the rest of the session. */
-#define MI_PLAIN(mi) (((mi).attr&7)==0)
+#define MI_PLAIN(mi) (((mi).attr&5)==0)
+static u64 s_skip_mb[8]; static int s_skip_n[8];   /* rw heap the player scan skipped, by attr&7 (logged per search) */
 /* targeted reads (a few bytes at a known address) only need the page not to be Locked, as in v0.5.3:
    the save buffers themselves can sit in IPC/device-attributed pages, and MI_PLAIN there hid every player */
 #define MI_RW(mi)    (((mi).attr&1)==0)
@@ -140,10 +142,11 @@ static void use_player(int i){
 static void find_thread(void* arg){
     (void)arg;
     uptr a=0; MemoryInfo mi; u32 pi; s_ncopies=0; s_ncand=0; s_nplayers=0; s_active=0;
-    int empty=0; u64 t0=nn_os_GetSystemTick(); s_attr_rej=0;
+    int empty=0; u64 t0=nn_os_GetSystemTick(); s_attr_rej=0; memset(s_skip_mb,0,sizeof s_skip_mb); memset(s_skip_n,0,sizeof s_skip_n);
     while(a<0x8000000000ul){
         if(svcQueryMemory(&mi,&pi,a)||mi.size==0) break;
         uptr end=mi.addr+mi.size;
+        if((mi.perm&3)==3 && mi.type==5 && !MI_PLAIN(mi)){ s_skip_n[mi.attr&7]++; s_skip_mb[mi.attr&7]+=mi.size; }
         if((mi.perm&3)==3 && mi.type==5 && MI_PLAIN(mi) && mi.size>=0x1000){
             for(uptr P=mi.addr+0x20; P+0xC0<end; P+=8){
                 if(!(P&(SCAN_CHUNK-1)) && (!scan_nap(P,&end) || P+0xC0>=end)) break;
@@ -166,6 +169,7 @@ static void find_thread(void* arg){
     }
     aden_log("search: %d players, %d empty slots, %d other pocket matches, %lu ms", s_nplayers, empty, s_ncand, (nn_os_GetSystemTick()-t0)/19200);
     if(s_attr_rej) aden_log("search: %d pockets skipped for memory attributes (last attr %x)", s_attr_rej, s_attr_last);
+    for(int i=0;i<8;i++) if(s_skip_n[i]) aden_log("search: skipped heap with attr %x: %d regions, %lu MB", i, s_skip_n[i], s_skip_mb[i]>>20);
     if(s_nplayers){
         /* default to the player with the most copies in memory: that is the one being played.
            A tie goes to the lowest PlayerID, so the guess does not depend on where memory landed. */
