@@ -24,7 +24,9 @@ CONTROLS (menu open)
   L / R            switch tab (Items, Player, Island, Mods, About)
   Up / Down        move
   B                close the menu
-  Items:  Y search, ZL/ZR amount, X pockets or storage, A spawn, Minus search player data again
+  Items:  arrows move in the grid, ZL/ZR item family, -/+ amount, Y search, X pockets or storage, A give
+          Items from DLC you do not own are not listed.
+  Player: Minus searches your player data again (after switching resident)
   Player/Island: Left/Right and ZL/ZR change the value, X max, Y zero, A on actions
 
 MOD MANAGER
@@ -47,7 +49,7 @@ TROUBLESHOOTING
     - If you see "Room Sketch" with its normal icon instead of "Aden Modmenu", the mod IS
       running but the aden folder isn't in sdmc. Tap Room Sketch: the menu opens anyway.
   "Player data not found"
-    - Press A in the Items tab (or Minus) to search again. If it keeps failing,
+    - Press A in the Items tab (or Minus in the Player tab) to search again. If it keeps failing,
       share the log.
   Still stuck?
     Post sdmc/aden/log.txt (Eden: %APPDATA%\eden\sdmc\aden\log.txt) with your report.
