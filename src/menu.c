@@ -6,6 +6,8 @@ void gfx_rect(float x,float y,float w,float h,u32 rgba);
 void gfx_rrect(float x,float y,float w,float h,float r,u32 rgba);
 void gfx_disk(float cx,float cy,float r,u32 rgba);
 static int s_hl_row=-1, s_hl_key=-1;   /* highlight pill: content row, keyboard column */
+static void (*s_paint)(void);           /* the tab's shapes, drawn over the panel and under the text */
+static int s_status_row;                /* where the status line goes this frame */
 u64  aden_input_take(void);
 int aden_player_ready(void); int aden_player_copies(void); void aden_player_find(void);
 int aden_stat_ok(int); u32 aden_stat_get(int); void aden_stat_set(int,u32);
@@ -17,6 +19,8 @@ int aden_storage_add(u16,int,int); int aden_storage_free(void);
 extern volatile int g_island_state; void aden_island_find(void); int aden_island_ready(void);
 u32 aden_turnip_sell(void); u32 aden_turnip_buy(void); void aden_turnip_set(int,u32);
 int aden_villager_info(int,const char**,int*,int*); void aden_villager_friend(int,u8); void aden_villager_moving(int,int);
+int aden_villager_species(int); int aden_turnip_week(u32*);
+int aden_pocket_free(void); int aden_pocket_slots(void); int aden_reactions_total(void);
 u32 aden_wallet_get(void); void aden_wallet_set(u32); int aden_pocket_add(u16 id,int qty,int stack);
 extern volatile int g_player_state;
 extern volatile int g_menu_open, g_input_hold;
@@ -37,36 +41,82 @@ enum { B_A=1<<0, B_B=1<<1, B_X=1<<2, B_Y=1<<3, B_L=1<<6, B_R=1<<7, B_ZL=1<<8, B_
 #define C_TABOFF 0xE6FFF8FF
 #define C_LINE   0xE7DEC6FF
 
-/* ---------- batched text grid ----------
-   Each cell = (row, column, colour). At the end of the frame every (column, colour)
-   pair becomes ONE multi-line print, keeping draw calls to a handful per frame. */
+/* panel geometry (720p units, origin centre, y up) */
+#define PX0  -625.f
+#define PW    570.f
+#define PY0   350.f
+#define PH    700.f
+#define HEADH 100.f
+#define TX   (PX0+30.f)
+#define CY   (PY0-HEADH-16.f)
+#define TABX0 (TX+8.f)      /* x of the first tab name */
+/* panel coordinates: x right from the panel's left edge, y down from its top */
+#define WX(x) (PX0+(x))
+#define WY(y) (PY0-(y))
+static void box(float x,float y,float w,float h,float r,u32 c){ gfx_rrect(WX(x),WY(y),w,h,r,c); }
+static void dot(float x,float y,float r,u32 c){ gfx_disk(WX(x),WY(y),r,c); }
+
+/* ---------- text canvas ----------
+   Text sits on a grid of 8 px columns (the debug font is monospaced) and 20 px rows, from
+   (TX, CY). Each colour is ONE multi-line print padded with spaces, so a whole screen costs one
+   print per colour: the debug font allows only 16 prints per frame. In panel coordinates column
+   c starts at x = GX(c) and row r at y = GY(r); its letters are centred about GY(r)+8. */
 #define PX 8.0f
 #define LH 20.0f
 #define MAXROWS 32
-#define MAXCELLS 96
-typedef struct { u8 row; u8 col; u32 color; char s[72]; } Cell;
-static Cell s_cells[MAXCELLS]; static int s_ncells;
-static const float COLX[4]={0,330,180,300};
+#define CVW 72
+#define NINK 8
+#define GX(c) (30.f+8.f*(c))
+#define GY(r) (116.f+20.f*(r))
+typedef struct { u32 color; u8 len[MAXROWS]; char row[MAXROWS][CVW]; } Ink;
+static Ink s_ink[NINK]; static int s_nink;
+static void at_s(int row,int col,u32 c,const char* t){
+    if(row<0||row>=MAXROWS||col<0) return;
+    Ink* k=0; for(int i=0;i<s_nink;i++) if(s_ink[i].color==c) k=&s_ink[i];
+    if(!k){ if(s_nink>=NINK) return; k=&s_ink[s_nink++]; k->color=c; memset(k->len,0,sizeof k->len); }
+    for(int i=0;t[i] && col+i<CVW;i++){
+        int x=col+i; while(k->len[row]<x) k->row[row][k->len[row]++]=' ';
+        k->row[row][x]=t[i]; if(k->len[row]<=x) k->len[row]=(u8)(x+1);
+    }
+}
+/* text at row, column (8 px each) */
+static void at(int row,int col,u32 c,const char* f,...){
+    char b[CVW+1]; __builtin_va_list ap; __builtin_va_start(ap,f); aden_vsnprintf(b,sizeof b,f,ap); __builtin_va_end(ap);
+    at_s(row,col,c,b);
+}
+/* the same, ending at column `end` (right-aligned) */
+static void at_r(int row,int end,u32 c,const char* f,...){
+    char b[CVW+1]; __builtin_va_list ap; __builtin_va_start(ap,f); aden_vsnprintf(b,sizeof b,f,ap); __builtin_va_end(ap);
+    at_s(row,end-(int)strlen(b),c,b);
+}
+static const int COLC[2]={0,41};   /* put() columns: labels, values */
 static void put(int row,int col,u32 c,const char* f,...){
-    if(s_ncells>=MAXCELLS||row>=MAXROWS) return;
-    Cell* e=&s_cells[s_ncells++]; e->row=row; e->col=col; e->color=c;
-    __builtin_va_list ap; __builtin_va_start(ap,f); aden_vsnprintf(e->s,sizeof e->s,f,ap); __builtin_va_end(ap);
+    char b[CVW+1]; __builtin_va_list ap; __builtin_va_start(ap,f); aden_vsnprintf(b,sizeof b,f,ap); __builtin_va_end(ap);
+    at_s(row,COLC[col&1],c,b);
 }
 static void flush(float x,float y){
-    static char buf[MAXROWS*74];
-    u8 done[MAXCELLS]; memset(done,0,sizeof done);
-    for(int i=0;i<s_ncells;i++){
-        if(done[i]) continue;
-        int col=s_cells[i].col; u32 c=s_cells[i].color;
-        const char* rows[MAXROWS]; memset(rows,0,sizeof rows); int maxr=0;
-        for(int j=i;j<s_ncells;j++) if(!done[j]&&s_cells[j].col==col&&s_cells[j].color==c){ done[j]=1; rows[s_cells[j].row]=s_cells[j].s; if(s_cells[j].row>maxr)maxr=s_cells[j].row; }
-        int n=0;
-        for(int r=0;r<=maxr;r++){ if(rows[r]){ for(const char* q=rows[r];*q && n<(int)sizeof buf-2;q++) buf[n++]=*q; } if(n<(int)sizeof buf-2) buf[n++]='\n'; }
+    static char buf[2040];
+    for(int i=0;i<s_nink;i++){
+        Ink* k=&s_ink[i]; int last=-1, n=0;
+        for(int r=0;r<MAXROWS;r++) if(k->len[r]) last=r;
+        for(int r=0;r<=last;r++){
+            int m=k->len[r]; if(n+m+2>(int)sizeof buf) break;
+            memcpy(buf+n,k->row[r],m); n+=m; buf[n++]='
+';
+        }
         buf[n]=0;
-        gfx_text(x+COLX[col],y,1.0f,c,buf);
+        if(n) gfx_text(x,y,1.0f,k->color,buf);
     }
-    s_ncells=0;
+    s_nink=0;
 }
+/* larger text (one print each), panel coordinates of its top-left corner */
+typedef struct { float x,y,s; u32 c; char t[24]; } Big;
+static Big s_big[6]; static int s_nbig;
+static void big(float x,float y,float sc,u32 c,const char* f,...){
+    if(s_nbig>=6) return; Big* b=&s_big[s_nbig++]; b->x=x; b->y=y; b->s=sc; b->c=c;
+    __builtin_va_list ap; __builtin_va_start(ap,f); aden_vsnprintf(b->t,sizeof b->t,f,ap); __builtin_va_end(ap);
+}
+static void flush_big(void){ for(int i=0;i<s_nbig;i++) gfx_text(WX(s_big[i].x),WY(s_big[i].y),s_big[i].s,s_big[i].c,s_big[i].t); s_nbig=0; }
 static void text(int row,u32 c,const char* s){ put(row,0,c,"%s",s); }
 
 /* ---------- input with key repeat ---------- */
@@ -191,7 +241,7 @@ static void scan_mods(void){
 /* ---------- state ---------- */
 enum { TAB_ITEMS, TAB_PLAYER, TAB_ISLAND, TAB_MODS, TAB_ABOUT, NTABS };
 static const char* TABNAME[NTABS]={"Items","Player","Island","Mods","About"};
-static int s_tab, s_cur[NTABS], s_top[NTABS];
+static int s_tab, s_cur[NTABS];
 static int s_qty=1; static int s_to_storage;
 static int s_typing; static int s_kx, s_ky;
 static const char* KEYS[4]={"ABCDEFGHIJ","KLMNOPQRST","UVWXYZ -'.","0123456789"};
@@ -199,7 +249,6 @@ static char s_status[96];
 static int s_was_open, s_armed;
 #define ROW0 0
 #define LIST 18
-#define MODLIST 16   /* mod rows that fit above the hint and message lines */
 
 /* pocket-style grid: GCOLS x GROWS tiles per page. tab_items fills the tile state, draw_grid
    draws the tiles (primitives) and draw_grid_text the labels: one print per column, since the
@@ -212,7 +261,6 @@ static int s_grid_on, s_grid_n, s_grid_sel, s_grid_fam[GPAGE];
 static u16 s_grid_id[GPAGE]; static char s_grid_fc[GPAGE];
 void aden_icons_want(int n,const u16* ids,const char* fams); int aden_icon_draw(u16 id,char fam,float x,float y,float w,float h,int mode);
 int aden_icons_on(void); int aden_icon_mode(void); void aden_icon_mode_set(int); void aden_icons_enable(void); void aden_icons_disable(void);
-static int s_icon_test;   /* About tab: draw the four icon variants */
 static char s_glab[GCOLS][GROWS*(2*GLINE+8)+1];
 static char s_famtxt[24];
 /* copy at most GLINE characters, ending with '.' when the text is cut */
@@ -378,72 +426,261 @@ static void tab_items(void){
         else aden_snprintf(s_status,sizeof s_status,"Added %d x %s to your pockets",r,it->name);
     }
 }
+/* ---------- shared bits of the redesigned tabs ---------- */
+#define C_WHITE  0xFFFFFFFF
+#define C_WELL   0xEFE7D2FF
+#define C_EMPTY  0xF2ECDBFF
+#define C_OFF    0xD8CFBDFF
+#define C_SLOT   0xD9CDB0FF
+#define C_GOLD   0xE8B33AFF
+#define C_BUY    0xE3A04AFF
+#define C_WARNBG 0xF8E0DAFF
+#define C_BODY   0xE2D6BCFF
+#define C_STICK  0x7A6853FF
+/* number with thousands separators; four buffers so a line can hold several */
+static const char* th(u32 v){
+    static char b[4][16]; static int k; char* o=b[k++&3]; char t[12];
+    int n=aden_snprintf(t,sizeof t,"%u",v), j=0;
+    for(int i=0;i<n;i++){ if(i && (n-i)%3==0) o[j++]=','; o[j++]=t[i]; }
+    o[j]=0; return o;
+}
+/* at most n characters of s (aden_snprintf has no precision); four buffers */
+static const char* clip(const char* s,int n){
+    static char b[4][24]; static int k; char* o=b[k++&3]; int i=0;
+    if(n>23) n=23;
+    for(;s[i] && i<n;i++) o[i]=s[i];
+    o[i]=0; return o;
+}
+/* a horizontal meter: track and fill */
+static void meter(float x,float y,float w,float h,float f,u32 c){
+    box(x,y,w,h,h*0.5f,C_LINE);
+    if(f>1) f=1;
+    if(f>0){ float fw=w*f; if(fw<h) fw=h; box(x,y,fw,h,h*0.5f,c); }
+}
+
+/* ---------- Player tab: resident card, currency tokens over a counter, unlock cards ----------
+   Up/Down picks a zone, Left/Right an entry in it. A on a currency opens its digits. */
+enum { Z_WHO, Z_MONEY, Z_UNLOCK };
+static int s_pz=Z_MONEY, s_pcur, s_punl, s_pedit, s_pdig;
+static const char* const CUR_NAME[4]={"Bells in wallet","Nook Miles","Bank savings","Poki"};
+static const char* const CUR_SHORT[4]={"Bells","Miles","Bank","Poki"};
+static const char* const CUR_ABBR[4]={"B","M","S","P"};
+static const u32 CUR_COL[4]={0xE8B33AFF,0x6FA8DCFF,0x9C7A55FF,0xE07A9BFF};
+/* the game's limits: 99,999 Bells in the wallet (more only fits as Bell bags), 9,999,999 Nook
+   Miles, 999,999,999 Bells in the bank. Poki has no published limit and players hold more than
+   1,000,000, so it gets 7 digits like the miles. */
+static const u32 CUR_CAP[4]={99999,9999999,999999999,9999999};
+static const s32 CUR_BIG[4]={10000,100000,1000000,100000};
+static int cur_ok(int k){ return k==0 ? aden_player_ready() : aden_stat_ok(k-1); }
+static u32 cur_get(int k){ return k==0 ? aden_wallet_get() : aden_stat_get(k-1); }
+static void cur_set(int k,s64 v){
+    if(v<0) v=0; if(v>(s64)CUR_CAP[k]) v=CUR_CAP[k];
+    if((u32)v==cur_get(k)) return;
+    if(k==0) aden_wallet_set((u32)v); else aden_stat_set(k-1,(u32)v);
+}
+static int ndig(u32 v){ int n=1; while(v>=10){ v/=10; n++; } return n; }
+static u32 pow10u(int n){ u32 p=1; while(n-->0) p*=10; return p; }
+/* digit boxes: 48 px apart, 16 px more between groups of three, centred on the counter */
+static float dig_x(int n,int i){
+    float x=285-(n*48-8+16*((n-1)/3))*0.5f;
+    for(int j=0;j<i;j++) x+= (n-1-j)%3==0 ? 64 : 48;
+    return x;
+}
+static struct { int np, ap, ok[4], free, slots, rk, rt, ek, et; u32 v[4]; } P;
+static void paint_player(void){
+    if(s_pz==Z_WHO) box(15,103,540,100,28,C_PILL);
+    box(20,108,530,90,24,C_WHITE);
+    dot(64,154,30,C_HEAD);
+    if(P.np>1) for(int i=0;i<P.np;i++) dot(114+i*14,186,4,i==P.ap?C_HEAD:C_LINE);
+    for(int k=0;k<4;k++){
+        float x=20+136*k;
+        if(s_pz==Z_MONEY && k==s_pcur) box(x,208,124,96,20,C_WHITE);
+        else box(x,208,124,80,20,P.ok[k]?C_WELL:C_EMPTY);
+        dot(x+22,224,12,P.ok[k]?CUR_COL[k]:C_DIM);
+    }
+    box(20,296,530,152,24,C_WHITE);
+    if(s_pz==Z_MONEY && P.ok[s_pcur]){
+        int n=ndig(CUR_CAP[s_pcur]);
+        for(int i=0;i<n;i++) box(dig_x(n,i),340,40,52,12,s_pedit && i==s_pdig ? C_PILL : C_WELL);
+    } else if(s_pz==Z_UNLOCK && s_punl==2){
+        for(int i=0;i<P.slots;i++) box(48+(i%20)*24,340+(i/20)*24,18,18,6,i<P.slots-P.free?C_SLOT:C_PILL);
+    } else if(s_pz==Z_UNLOCK){
+        int k= s_punl ? P.ek : P.rk, t= s_punl ? P.et : P.rt;
+        meter(40,342,490,10,t?(float)k/t:0,C_HEAD);
+    }
+    /* unlock cards; progress as a ring of 16 dots like the loading spinner */
+    for(int i=0;i<3;i++){
+        float x=22+176*i, cx=x+36, cy=494;
+        if(s_pz==Z_UNLOCK && i==s_punl) box(x-5,457,180,94,22,C_PILL);
+        box(x,462,170,84,20,C_WHITE);
+        if(i<2){
+            int k= i ? P.ek : P.rk, t= i ? P.et : P.rt, on= t ? (k*16+t/2)/t : 0;
+            static const float RING[16][2]={{0,-24},{9.18f,-22.17f},{16.97f,-16.97f},{22.17f,-9.18f},{24,0},{22.17f,9.18f},{16.97f,16.97f},{9.18f,22.17f},
+                                            {0,24},{-9.18f,22.17f},{-16.97f,16.97f},{-22.17f,9.18f},{-24,0},{-22.17f,-9.18f},{-16.97f,-16.97f},{-9.18f,-22.17f}};
+            for(int d=0;d<16;d++) dot(cx+RING[d][0],cy+RING[d][1],3.2f,d<on?C_HEAD:C_LINE);
+        } else { dot(cx,cy+6,18,C_GOLD); dot(cx,cy-16,7,C_GOLD); }
+    }
+}
 static void tab_player(void){
-    int* cur=&s_cur[TAB_PLAYER];
     if(g_player_state==0) aden_player_find();
-    if(loading_page(0)) return;
-    if(!aden_player_ready()){ text(ROW0+2,C_DIM,"Finding your player data..."); return; }
+    if(loading_page(0)){ s_pedit=0; return; }
+    if(!aden_player_ready()){ text(ROW0+2,C_DIM,"Finding your player data..."); s_pedit=0; return; }
     /* Minus redoes the player search (not while the island thread reads the copies) */
-    if(pr(B_MINUS) && g_island_state!=1){ s_status[0]=0; g_player_state=0; g_island_state=0; aden_player_find(); return; }
-    text(26,C_DIM,"- search player data again (after switching resident)");
-    char pn[24],tn[24]; aden_player_names(pn,tn,sizeof pn);
-    if(pn[0]) put(ROW0,0,C_TEXT,"%s of %s",pn,tn); else text(ROW0,C_TEXT,"Character stats");
-    enum { R_BELLS, R_MILES, R_BANK, R_POKI, R_RECIPES, R_REACT, R_BAGS, NROWS };
-    /* islands with several residents: choose who to edit (row -1 = player picker) */
-    int np=aden_player_count(), minrow = np>1 ? -1 : 0;
-    if(*cur<minrow) *cur=minrow;
-    if(up()&&*cur>minrow)(*cur)--; if(down()&&*cur<NROWS-1)(*cur)++;
-    if(np>1){
-        int ap=aden_player_active();
-        put(ROW0+1,0,C_TEXT,"Editing: < %s >",aden_player_name(ap));
-        put(ROW0+1,1,C_DIM,"%d residents",np);
-        if(*cur==-1){
-            s_hl_row=ROW0+1;
-            if(left())  aden_player_select((ap+np-1)%np);
-            if(right()) aden_player_select((ap+1)%np);
-            text(ROW0+11,C_DIM,"Left/Right picks which resident to edit.");
-            text(ROW0+12,C_DIM,"Items you spawn go to this resident too.");
-        }
-    }
-    if(*cur>=0) s_hl_row=ROW0+2+*cur;
-    static const char* LBL[4]={"Bells in wallet","Nook Miles","Bank savings","Poki"};
-    for(int i=0;i<4;i++){
-        put(ROW0+2+i,0,C_TEXT,"%s",LBL[i]);
-        if(i==0) put(ROW0+2+i,1,C_TEXT,"%u",aden_wallet_get());
-        else if(aden_stat_ok(i-1)) put(ROW0+2+i,1,C_TEXT,"%u",aden_stat_get(i-1));
-        else put(ROW0+2+i,1,C_DIM,"not found");
-    }
-    put(ROW0+2+R_RECIPES,0,C_TEXT,"Learn every DIY recipe"); put(ROW0+2+R_RECIPES,1,C_TEXT,"%d / %d",aden_recipes_known(),aden_recipes_total());
-    put(ROW0+2+R_REACT,0,C_TEXT,"Learn every reaction");    put(ROW0+2+R_REACT,1,C_TEXT,"%d known",aden_reactions_known());
-    put(ROW0+2+R_BAGS,0,C_TEXT,"Fill pockets with 99,000 Bell bags");
-    int H=ROW0+11;
-    if(*cur<0){ }
-    else if(*cur<=R_POKI){
-        static const s32 STEP[4]={1000,1000,100000,100}, BIG[4]={10000,10000,1000000,1000};
-        static const u32 CAP[4]={99999,999999,999999999,999999};
-        int f=*cur-1;
-        if(*cur>0 && !aden_stat_ok(f)){ text(H,C_DIM,"This value was not found in memory."); }
-        else {
-            s64 old=*cur==0?aden_wallet_get():aden_stat_get(f), v=old;
-            if(left())  v-=STEP[*cur]; if(right()) v+=STEP[*cur];
-            if(pr(B_ZL)) v-=BIG[*cur];  if(pr(B_ZR)) v+=BIG[*cur];
-            if(pr(B_X)) v=CAP[*cur]; if(pr(B_Y)) v=0;
-            if(v<0) v=0; if(v>(s64)CAP[*cur]) v=CAP[*cur];
-            if(v!=old){ if(*cur==0) aden_wallet_set((u32)v); else aden_stat_set(f,(u32)v); }
-            put(H,0,C_DIM,"Left/Right +-%d   ZL/ZR +-%d",STEP[*cur],BIG[*cur]);
-            put(H+1,0,C_DIM,"X max (%u)   Y zero",CAP[*cur]);
-            if(*cur==R_POKI) text(H+2,C_DIM,"Poki is the Happy Home Paradise currency.");
-        }
-    } else if(*cur==R_RECIPES){
-        text(H,C_DIM,"A adds every DIY recipe to your recipe book.");
-        text(H+1,C_DIM,"New ones show up marked as new.");
-        if(pr(B_A)){ int n=aden_recipes_learn_all(); aden_snprintf(s_status,sizeof s_status,n<0?"Recipe book not found":(n?"Learned %d new recipes":"You already know every recipe"),n); }
-    } else if(*cur==R_REACT){
-        text(H,C_DIM,"A adds every reaction to your reaction list.");
-        if(pr(B_A)){ int n=aden_reactions_learn_all(); aden_snprintf(s_status,sizeof s_status,n<0?"Reactions not found":(n?"Learned %d new reactions":"You already know every reaction"),n); }
+    if(!s_pedit && pr(B_MINUS) && g_island_state!=1){ s_status[0]=0; g_player_state=0; g_island_state=0; aden_player_find(); return; }
+    P.np=aden_player_count(); P.ap=aden_player_active();
+    for(int k=0;k<4;k++){ P.ok[k]=cur_ok(k); P.v[k]=P.ok[k]?cur_get(k):0; }
+    int minz= P.np>1 ? Z_WHO : Z_MONEY;
+    if(s_pz<minz) s_pz=minz;
+    if(s_pedit && !P.ok[s_pcur]) s_pedit=0;
+    if(s_pedit){
+        int k=s_pcur, n=ndig(CUR_CAP[k]);
+        if(left() && s_pdig>0) s_pdig--;
+        if(right() && s_pdig<n-1) s_pdig++;
+        s64 v=P.v[k], d=pow10u(n-1-s_pdig);
+        if(up()) v+=d; if(down()) v-=d;
+        if(pr(B_X)) v=CUR_CAP[k]; if(pr(B_Y)) v=0;
+        cur_set(k,v);
+        if(pr(B_A)||pr(B_B)){ s_pedit=0; s_press&=~(u64)B_B; }   /* B only closes the digits */
     } else {
-        text(H,C_DIM,"A fills every empty pocket slot.");
-        if(pr(B_A)){ int n=aden_pocket_add(0x08A4,40,1); aden_snprintf(s_status,sizeof s_status,n>0?"Added %d Bell bags":n==0?"Your pockets are full":n==-1?"Player data not ready yet - try again in a moment":"Pockets look wrong - nothing was added",n); }
+        if(up() && s_pz>minz) s_pz--;
+        if(down() && s_pz<Z_UNLOCK) s_pz++;
+        if(s_pz==Z_WHO){
+            if(left())  aden_player_select((P.ap+P.np-1)%P.np);
+            if(right()) aden_player_select((P.ap+1)%P.np);
+        } else if(s_pz==Z_MONEY){
+            if(left() && s_pcur>0) s_pcur--;
+            if(right() && s_pcur<3) s_pcur++;
+            int k=s_pcur;
+            if(P.ok[k]){
+                s64 v=P.v[k];
+                if(pr(B_ZL)) v-=CUR_BIG[k]; if(pr(B_ZR)) v+=CUR_BIG[k];
+                if(pr(B_X)) v=CUR_CAP[k]; if(pr(B_Y)) v=0;
+                cur_set(k,v);
+                if(pr(B_A)){ int n=ndig(CUR_CAP[k]); s_pedit=1; s_pdig= n>4 ? n-4 : 0; }   /* start on the thousands */
+            }
+        } else {
+            if(left() && s_punl>0) s_punl--;
+            if(right() && s_punl<2) s_punl++;
+            if(pr(B_A)){
+                if(s_punl==0){ int n=aden_recipes_learn_all(); aden_snprintf(s_status,sizeof s_status,n<0?"Recipe book not found":(n?"Learned %d new recipes":"You already know every recipe"),n); }
+                else if(s_punl==1){ int n=aden_reactions_learn_all(); aden_snprintf(s_status,sizeof s_status,n<0?"Reactions not found":(n?"Learned %d new reactions":"You already know every reaction"),n); }
+                else { int n=aden_pocket_add(0x08A4,40,1); aden_snprintf(s_status,sizeof s_status,n>0?"Added %d Bell bags":n==0?"Your pockets are full":n==-1?"Player data not ready yet - try again in a moment":"Pockets look wrong - nothing was added",n); }
+            }
+        }
+    }
+    /* read again after the edits above */
+    P.np=aden_player_count(); P.ap=aden_player_active();
+    for(int k=0;k<4;k++){ P.ok[k]=cur_ok(k); P.v[k]=P.ok[k]?cur_get(k):0; }
+    P.free=aden_pocket_free(); P.slots=aden_pocket_slots(); if(P.slots<0) P.slots=0; if(P.free>P.slots) P.free=P.slots;
+    P.rk=aden_recipes_known(); P.rt=aden_recipes_total(); P.ek=aden_reactions_known(); P.et=aden_reactions_total();
+
+    /* resident card */
+    char pn[24],tn[24]; aden_player_names(pn,tn,sizeof pn);
+    const char* nm=aden_player_name(P.ap); if(!nm[0]) nm=pn[0]?pn:"You";
+    big(56,138,2.0f,C_WHITE,"%c",nm[0]);
+    big(110,120,1.6f,C_TEXT,"%s",clip(nm,16));
+    if(tn[0]) at(2,10,C_DIM,"of %s",tn);
+    if(P.np>1) at_r(1,62,C_DIM,"< %d / %d >",P.ap+1,P.np); else at_r(1,62,C_DIM,"Only resident");
+    /* currency tokens */
+    for(int k=0;k<4;k++){
+        at(5,1+17*k,C_WHITE,"%s",CUR_ABBR[k]);
+        at(5,4+17*k,C_TEXT,"%s",CUR_SHORT[k]);
+        if(P.ok[k]) at(7,1+17*k,C_TEXT,"%s",th(P.v[k])); else at(7,1+17*k,C_DIM,"--");
+    }
+    /* counter: what the chosen entry does */
+    if(s_pz==Z_MONEY){
+        int k=s_pcur;
+        if(P.ok[k]){
+            int n=ndig(CUR_CAP[k]), lead=n-ndig(P.v[k]);
+            at(10,1,C_TEXT,"%s",CUR_NAME[k]); at_r(10,62,C_DIM,"max %s",th(CUR_CAP[k]));
+            /* one print for the digits, one for the grey leading zeros: 3 characters (48 px) per box */
+            char d[40], z[40]; int m=0; u32 v=P.v[k];
+            for(int i=0;i<n;i++){
+                char c='0'+(char)(v/pow10u(n-1-i)%10);
+                int w= i<n-1 && (n-1-i)%3==0 ? 4 : 3;
+                for(int j=0;j<w;j++){ d[m+j]=' '; z[m+j]=' '; }
+                if(i<lead) z[m]=c; else d[m]=c;
+                m+=w;
+            }
+            d[m]=z[m]=0;
+            big(dig_x(n,0)+12,350,2.0f,C_TEXT,"%s",d);
+            if(lead) big(dig_x(n,0)+12,350,2.0f,C_DIM,"%s",z);
+            if(s_pedit){
+                at(14,1,C_DIM,"Left/Right pick a digit   Up/Down change it   A done");
+                at(15,1,C_DIM,"X max   Y zero");
+            } else {
+                at(14,1,C_DIM,"A edit digits   ZL/ZR +-%s   X max   Y zero",th(CUR_BIG[k]));
+                if(k==0) at(15,1,C_DIM,"More than 99,999 Bells only fits as Bell bags.");
+                if(k==3) at(15,1,C_DIM,"Poki is the Happy Home Paradise currency.");
+            }
+        } else {
+            at(10,1,C_TEXT,"%s was not found in memory.",CUR_SHORT[k]);
+            at(12,1,C_DIM,"Press - to search the player data again.");
+            if(k==3) at(13,1,C_DIM,"Poki is the Happy Home Paradise currency.");
+        }
+    } else if(s_pz==Z_WHO){
+        at(10,1,C_TEXT,"Residents"); at_r(10,62,C_DIM,"%d on this island",P.np);
+        for(int i=0;i<P.np && i<8;i++)
+            at(11+i%4,3+30*(i/4),i==P.ap?C_TEXT:C_DIM,"%s%s",i==P.ap?"> ":"  ",clip(aden_player_name(i),20));
+        at(15,1,C_DIM,"Left/Right: who to edit (items you spawn go to them too)");
+    } else if(s_punl<2){
+        int rec= s_punl==0, k= rec ? P.rk : P.ek, t= rec ? P.rt : P.et;
+        at(10,1,C_TEXT,rec?"Learn every DIY recipe":"Learn every reaction"); at_r(10,62,C_DIM,"%d / %d",k,t);
+        at(13,1,C_DIM,rec?"%d recipes to learn - new ones show up marked as new.":"%d reactions to learn.",t>k?t-k:0);
+        at(14,1,C_DIM,rec?"A adds them all to your recipe book.":"A adds them all to your reaction list.");
+    } else {
+        at(10,1,C_TEXT,"Fill pockets with Bell bags"); at_r(10,62,C_DIM,"%d free slots",P.free);
+        at(14,1,C_DIM,"A puts a 99,000 Bell bag in each free slot.");
+        at(15,1,C_TEXT,"%d bags = %s Bells",P.free,th((u32)P.free*99000u));
+    }
+    /* unlock cards */
+    at(18,8,C_TEXT,"Recipes");   at(19,8,C_DIM,"%d/%d",P.rk,P.rt);
+    at(18,30,C_TEXT,"Reactions"); at(19,30,C_DIM,"%d/%d",P.ek,P.et);
+    at(18,52,C_TEXT,"Bell bags"); if(P.free>=0) at(19,52,C_DIM,"%d free",P.free); else at(19,52,C_DIM,"--");
+    text(26,C_DIM,s_pedit?"Left/Right digit  Up/Down change  X max  Y zero  A done"
+                         :"Up/Down zone  Left/Right pick  A open/use  - search again");
+    s_paint=paint_player;
+}
+
+/* ---------- Island tab: two price tickets, villager list, a card for the chosen line ---------- */
+static const char* const SPECIES[35]={"Anteater","Bear","Bird","Bull","Cat","Cub","Chicken","Cow","Alligator","Deer",
+    "Dog","Duck","Elephant","Frog","Goat","Gorilla","Hamster","Hippo","Horse","Koala","Kangaroo","Lion","Monkey","Mouse",
+    "Octopus","Ostrich","Eagle","Penguin","Pig","Rabbit","Rhino","Sheep","Squirrel","Tiger","Wolf"};
+static const u32 VCOL[8]={0x9DB0CCFF,0xD9B48AFF,0xE9A3C9FF,0xA9CDEBFF,0xF2A65AFF,0xE8C547FF,0xF08A6CFF,0xC79C6EFF};
+/* friendship level 1-6 from the 0-255 points, 0 if not met */
+static int flevel(int f){ return f<0?0 : f<25?1 : f<70?2 : f<100?3 : f<150?4 : f<200?5 : 6; }
+static struct { int nv, vk[10], vf[10], vm[10], vs[10]; const char* vn[10]; u32 sell, buy, week[12]; } I;
+static void paint_island(void){
+    int cur=s_cur[TAB_ISLAND];
+    for(int t=0;t<2;t++){
+        float x=14+272*t; u32 v= t ? I.buy : I.sell;
+        if(cur==t) box(x-4,100,270,100,22,C_PILL);
+        box(x,104,262,92,18,C_WHITE);
+        meter(x+16,178,230,8,v/999.f,t?C_BUY:C_HEAD);
+    }
+    box(16,204,220,356,18,C_WELL);
+    dot(46,244,7,C_HEAD);
+    for(int i=0;i<I.nv;i++) dot(46,264+20*i,7,I.vs[i]<0?C_OFF:VCOL[I.vs[i]%8]);
+    if(cur>=2) box(22,GY(6+cur-2)-3,208,22,11,C_PILL);
+    for(int i=0;i<I.nv;i++) if(I.vm[i]) box(152,GY(7+i)-1,40,18,9,C_WARNBG);
+    box(244,204,310,356,18,C_WHITE);
+    if(cur<2){
+        for(int i=0;i<4;i++) box(262,GY(8+2*i)-3,56,22,11,C_HEADDK);
+        if(cur==0){
+            for(int i=0;i<12;i++){ float h=I.week[i]*70.f/999; if(h<2) h=2; if(h>70) h=70; box(264+23*i,530-h,17,h,4,C_HEAD); }
+            box(262,530,276,2,0,C_LINE);
+        }
+    } else {
+        int i=cur-3, f= i<0 ? -1 : I.vf[i], L=flevel(f);
+        dot(294,244,28,i<0?C_HEAD:(I.vs[i]<0?C_OFF:VCOL[I.vs[i]%8]));
+        if(i>=0){
+            meter(262,318,276,10,f<0?0:f/255.f,C_HEAD);
+            for(int d=0;d<6;d++) dot(271+22*d,GY(11)+8,7,d<L?C_PILL:C_LINE);
+        }
+        box(262,366,276,2,0,C_LINE);
+        int nk= i<0 ? 1 : 3;
+        for(int k=0;k<nk;k++) dot(274,GY(13+2*k)+8,12,C_HEADDK);
+        if(i>=0 && I.vm[i]) box(262,488,276,56,14,C_WARNBG);
     }
 }
 static void tab_island(void){
@@ -451,128 +688,297 @@ static void tab_island(void){
     if(g_player_state==0) aden_player_find();
     if(g_player_state==2 && g_island_state==0) aden_island_find();
     if(loading_page(1)) return;
-    text(ROW0,C_TEXT,"Island");
     if(!aden_island_ready()){ text(ROW0+2,C_DIM,"Finding your island data..."); return; }
-    int vk[10], nv=0; const char* vn[10]; int vf[10], vm[10];
-    for(int k=0;k<10;k++) if(aden_villager_info(k,&vn[nv],&vf[nv],&vm[nv])) vk[nv++]=k;
-    int NROWS=3+nv;
+    I.nv=0;
+    for(int k=0;k<10;k++) if(aden_villager_info(k,&I.vn[I.nv],&I.vf[I.nv],&I.vm[I.nv])){ I.vk[I.nv]=k; I.vs[I.nv]=aden_villager_species(k); I.nv++; }
+    int NROWS=3+I.nv;
     if(up()&&*cur>0)(*cur)--; if(down()&&*cur<NROWS-1)(*cur)++;
-    s_hl_row=ROW0+2+*cur + (*cur>=3 ? 1 : 0);
-    put(ROW0+2,0,C_TEXT,"Turnip sell price (all week)"); put(ROW0+2,1,C_TEXT,"%u",aden_turnip_sell());
-    put(ROW0+3,0,C_TEXT,"Turnip buy price (Daisy Mae)"); put(ROW0+3,1,C_TEXT,"%u",aden_turnip_buy());
-    put(ROW0+4,0,C_TEXT,"Max friendship with everyone");
-    put(ROW0+5,0,C_DIM,"Villagers (%d)",nv); put(ROW0+5,1,C_DIM,"friendship");
-    for(int i=0;i<nv;i++){
-        put(ROW0+6+i,0,C_TEXT,"%s%s",vn[i],vm[i]?"  (moving out)":"");
-        if(vf[i]<0) put(ROW0+6+i,1,C_DIM,"-"); else put(ROW0+6+i,1,C_TEXT,"%d",vf[i]);
-    }
-    int H=ROW0+17;
+    if(*cur>NROWS-1) *cur=NROWS-1;
     if(*cur<2){
         int sell=*cur==0; s64 old=sell?aden_turnip_sell():aden_turnip_buy(), v=old;
         if(left()) v-=10; if(right()) v+=10; if(pr(B_ZL)) v-=100; if(pr(B_ZR)) v+=100;
         if(pr(B_X)) v= sell?660:90; if(pr(B_Y)) v=0;
         if(v<0) v=0; if(v>999) v=999;
         if(v!=old) aden_turnip_set(sell,(u32)v);
-        text(H,C_DIM,"Left/Right +-10   ZL/ZR +-100");
-        text(H+1,C_DIM,sell?"X best natural price (660)   Y zero":"X cheapest natural price (90)   Y zero");
-        text(H+2,C_DIM,"Sell prices apply to every half-day this week.");
     } else if(*cur==2){
-        text(H,C_DIM,"A sets every villager's friendship to max (255).");
-        if(pr(B_A)){ for(int i=0;i<nv;i++) aden_villager_friend(vk[i],255); aden_snprintf(s_status,sizeof s_status,"Every villager is now your best friend"); }
+        if(pr(B_A)){ for(int i=0;i<I.nv;i++) aden_villager_friend(I.vk[i],255); aden_snprintf(s_status,sizeof s_status,"Every villager is now your best friend"); }
     } else {
         int i=*cur-3;
-        text(H,C_DIM,"A max friendship   Y reset friendship");
-        text(H+1,C_DIM,"X toggles moving out (they leave after a save)");
-        if(pr(B_A)){ aden_villager_friend(vk[i],255); aden_snprintf(s_status,sizeof s_status,"%s is now your best friend",vn[i]); }
-        if(pr(B_Y)){ aden_villager_friend(vk[i],25); aden_snprintf(s_status,sizeof s_status,"%s friendship reset",vn[i]); }
-        if(pr(B_X)){ aden_villager_moving(vk[i],!vm[i]); aden_snprintf(s_status,sizeof s_status,vm[i]?"%s is staying":"%s is now moving out",vn[i]); }
+        if(pr(B_A)){ aden_villager_friend(I.vk[i],255); aden_snprintf(s_status,sizeof s_status,"%s is now your best friend",I.vn[i]); }
+        if(pr(B_Y)){ aden_villager_friend(I.vk[i],25); aden_snprintf(s_status,sizeof s_status,"%s friendship reset",I.vn[i]); }
+        if(pr(B_X)){ aden_villager_moving(I.vk[i],!I.vm[i]); aden_snprintf(s_status,sizeof s_status,I.vm[i]?"%s is staying":"%s is now moving out",I.vn[i]); }
     }
+    /* read again after the edits above */
+    for(int i=0;i<I.nv;i++){ const char* n; aden_villager_info(I.vk[i],&n,&I.vf[i],&I.vm[i]); }
+    I.sell=aden_turnip_sell(); I.buy=aden_turnip_buy(); aden_turnip_week(I.week);
+
+    /* tickets: both prices in one print at scale 2 (16 px a character, the tickets 17 apart) */
+    at(0,0,C_DIM,"Sell, all week"); at(0,34,C_DIM,"Buy, Daisy Mae");
+    char sb[24]; int sl=aden_snprintf(sb,sizeof sb,"%u",I.sell), bl=ndig(I.buy);
+    while(sl<17) sb[sl++]=' ';
+    aden_snprintf(sb+17,sizeof sb-17,"%u",I.buy); sl=ndig(I.sell);
+    big(30,136,2.0f,C_TEXT,"%s",sb);
+    at(2,2*sl+1,C_DIM,"bells"); at(2,34+2*bl+1,C_DIM,"bells");
+    /* villager list */
+    at(5,2,C_DIM,"Villagers %d/10",I.nv);
+    at(6,4,C_TEXT,"Everyone");
+    for(int i=0;i<I.nv;i++){
+        at(7+i,4,C_TEXT,"%s",clip(I.vn[i],10));
+        if(I.vm[i]) at(7+i,16,C_WARN,"out");
+        if(I.vf[i]<0) at_r(7+i,24,C_DIM,"-"); else at_r(7+i,24,C_TEXT,"%d",I.vf[i]);
+    }
+    /* card */
+    if(*cur<2){
+        int sell=*cur==0;
+        at(5,29,C_TEXT,sell?"Sell price":"Buy price");
+        at(6,29,C_DIM,sell?"Every half-day, Mon to Sat":"Daisy Mae, Sunday morning");
+        static const char* const KEY[4]={"< >","ZL ZR","X","Y"}; static const int KC[4]={31,30,32,32};
+        for(int k=0;k<4;k++) at(8+2*k,KC[k],C_WHITE,"%s",KEY[k]);
+        at(8,36,C_TEXT,"+-10"); at(10,36,C_TEXT,"+-100");
+        at(12,36,C_TEXT,sell?"Best natural (660)":"Cheapest natural (90)"); at(14,36,C_TEXT,"Zero");
+        if(sell){ at(16,29,C_DIM,"This week"); at(21,29,C_DIM,"Mon"); at_r(21,63,C_DIM,"Sat"); }
+        else { at(16,29,C_DIM,"Daisy Mae sells turnips"); at(17,29,C_DIM,"on Sunday mornings."); }
+    } else if(*cur==2){
+        int bf=0; for(int i=0;i<I.nv;i++) if(I.vf[i]==255) bf++;
+        at(6,32,C_WHITE,"All");
+        big(334,222,1.6f,C_TEXT,"Everyone");
+        at(7,38,C_DIM,"%d villagers",I.nv);
+        at(9,29,C_DIM,"Best friends"); at_r(9,63,C_TEXT,"%d / %d",bf,I.nv);
+        at(10,29,C_DIM,"A sets every villager's friendship");
+        at(11,29,C_DIM,"to the max (255).");
+        at(13,30,C_WHITE,"A"); at(13,33,C_TEXT,"Best friend for all (255)");
+    } else {
+        int i=*cur-3, f=I.vf[i];
+        at(6,32,C_TEXT,"%c%c",I.vn[i][0],I.vn[i][1]?I.vn[i][1]:' ');
+        big(334,222,1.6f,C_TEXT,"%s",clip(I.vn[i],12));
+        at(7,38,C_DIM,"%s",I.vs[i]>=0?SPECIES[I.vs[i]]:"");
+        at(9,29,C_DIM,"Friendship");
+        if(f<0) at_r(9,63,C_DIM,"not met yet"); else at_r(9,63,C_TEXT,"%d / 255",f);
+        if(f>=0) at_r(11,63,C_DIM,"Level %d of 6",flevel(f));
+        at(13,30,C_WHITE,"A"); at(13,33,C_TEXT,"Best friend (255)");
+        at(15,30,C_WHITE,"Y"); at(15,33,C_TEXT,"Reset friendship (25)");
+        at(17,30,C_WHITE,"X"); at(17,33,C_TEXT,"Moving out: %s",I.vm[i]?"yes":"no");
+        if(I.vm[i]){ at(19,31,C_WARN,"Moving out"); at(20,31,C_WARN,"Leaves after your next save"); }
+    }
+    text(26,C_DIM,*cur<2?"Up/Down pick   Left/Right +-10   ZL/ZR +-100   X best   Y zero"
+                       :"Up/Down pick   A best friend   Y reset   X moving out");
+    s_status_row=23;
+    s_paint=paint_island;
+}
+
+/* ---------- Mods tab: Stack 99 banner, then the mod folders as cards, 9 a page ---------- */
+#define MPAGE 9
+static int s_msel=-1;   /* -1: the Stack 99 banner, else a mod */
+static const u32 BADGE[8]={0xE0A24AFF,0xE07A9BFF,0x7DBF5AFF,0x6B9BD1FF,0x9C7A55FF,0xC08A55FF,0xD46A5AFF,0x8FB3C9FF};
+static int mods_pending(void){ int n=0; for(int i=0;i<s_nmods;i++) if(s_mods[i].on!=s_mods[i].on_at_start) n++; return n; }
+static void paint_mods(void){
+    int on=aden_stack99_on(), pend=mods_pending();
+    box(20,108,530,76,22,s_msel<0?C_PILL:C_WELL);
+    box(38,128,64,36,18,on?C_HEAD:C_OFF); dot(on?84:56,146,14,C_WHITE);
+    int L= aden_stack99_found() ? 4 : 10;
+    box(30+8*(62-L)-12,131,8*L+24,26,13,C_WHITE);
+    int pages=(s_nmods+MPAGE-1)/MPAGE, pg= s_msel<0 ? 0 : s_msel/MPAGE;
+    if(pages>1) for(int i=0;i<pages;i++) dot(540-(pages-1-i)*16,204,5,i==pg?C_HEAD:C_LINE);
+    if(!s_nmods){
+        box(20,220,530,284,22,C_WELL);
+        box(255,262,26,10,3,C_SLOT); box(255,270,60,40,6,C_SLOT);   /* a folder */
+    }
+    for(int i=0;i<MPAGE && pg*MPAGE+i<s_nmods;i++){
+        int k=pg*MPAGE+i; Mod* m=&s_mods[k];
+        float x=18+176*(i%3), y=220+100*(i/3);
+        if(k==s_msel) box(x-5,y-5,180,94,22,C_PILL);
+        box(x,y,170,84,18,m->romfs?C_WELL:C_EMPTY);
+        dot(x+28,y+25,13,m->romfs?BADGE[k%8]:C_OFF);
+        if(m->romfs){ box(x+118,y+14,38,22,11,m->on?C_HEAD:C_OFF); dot(m->on?x+145:x+129,y+25,9,C_WHITE); }
+    }
+    if(pend) box(20,512,530,32,16,C_PILL);
+}
+/* up to two capitals of the folder name, else its first letter */
+static void initials(const char* s,char* o){
+    int n=0; for(const char* p=s;*p && n<2;p++) if(*p>='A'&&*p<='Z') o[n++]=*p;
+    if(!n){ o[n++]= s[0]>='a'&&s[0]<='z' ? s[0]-32 : s[0]; }
+    o[n]=0;
+}
+static void stack99_toggle(void){
+    int on=!aden_stack99_on();
+    /* off: split stacks over the normal max first, or the game shows them as 1 */
+    if(!on){
+        int need, have, k=aden_split_stacks(item_stack,&need,&have);
+        if(k==-1){ if(g_player_state!=1) aden_player_find();
+            aden_snprintf(s_modmsg,sizeof s_modmsg,"Finding your player data to split stacks - press A again"); return; }
+        if(k==-2){ aden_snprintf(s_modmsg,sizeof s_modmsg,"Pockets or storage look wrong - Stack 99 stays ON"); return; }
+        if(k==-3){ aden_snprintf(s_modmsg,sizeof s_modmsg,"Need %d free slots (pockets+storage), have %d - Stack 99 stays ON",need,have); return; }
+        if(k>0) aden_log("stack 99 off: %d stacks split", k);
+    }
+    int r=aden_stack99_set(on);
+    if(r<0) aden_snprintf(s_modmsg,sizeof s_modmsg,"Stack 99 is now %s - restart the game to apply",on?"ON":"off");
+    else aden_snprintf(s_modmsg,sizeof s_modmsg,"Stack 99 is now %s (%d item kinds changed)",on?"ON":"off",r);
 }
 static void tab_mods(void){
     if(!s_mods_scanned) scan_mods();
-    /* row 0 is the built-in Stack 99 switch, rows 1.. the mod folders */
-    int* cur=&s_cur[TAB_MODS]; int* top=&s_top[TAB_MODS]; int nrows=s_nmods+1;
-    text(ROW0,C_TEXT,"Mod manager");
-    text(ROW0+1,C_DIM,"Mods go in sdmc/aden/mods/<name>/romfs/...");
-    text(ROW0+2,C_DIM,"A turns a mod on/off. Applies when the game restarts.");
-    if(up()&&*cur>0)(*cur)--; if(down()&&*cur<nrows-1)(*cur)++;
-    if(*cur<*top) *top=*cur; if(*cur>=*top+MODLIST) *top=*cur-MODLIST+1;
-    for(int i=0;i<MODLIST && *top+i<nrows;i++){
-        int r=*top+i;
-        if(*top+i==*cur) s_hl_row=ROW0+4+i;
-        if(r==0){
-            put(ROW0+4+i,0,C_TEXT,"[%s] Stack 99 (built-in)",aden_stack99_on()?"ON ":"off");
-            put(ROW0+4+i,1,C_DIM,"%s",aden_stack99_found()?"live":"next start");
-            continue;
-        }
-        Mod* m=&s_mods[r-1];
-        const char* kind = m->romfs ? (m->exefs?"romfs only":"") : (m->exefs?"code mod: use Eden":"no romfs folder");
-        put(ROW0+4+i,0,C_TEXT,"[%s] %s",m->on?"ON ":"off",m->name);
-        if(m->on!=m->on_at_start) put(ROW0+4+i,1,C_WARN,"restart needed");
-        else if(kind[0]) put(ROW0+4+i,1,C_DIM,"%s",kind);
+    int n=s_nmods;
+    if(s_msel>=n) s_msel=n-1;
+    /* move: the banner sits above the first row of cards */
+    if(s_msel<0){ if(down() && n) s_msel=0; }
+    else {
+        int pos=s_msel%MPAGE;
+        if(left() && pos%3>0) s_msel--;
+        if(right() && pos%3<2 && s_msel+1<n) s_msel++;
+        if(up()){ if(pos>=3) s_msel-=3; else s_msel=-1; }
+        else if(down() && pos<6){ if(s_msel+3<n) s_msel+=3; else if((s_msel/3+1)*3<n) s_msel=n-1; }
+        if(pr(B_ZL) && s_msel>=MPAGE) s_msel-=MPAGE;
+        if(pr(B_ZR) && (s_msel/MPAGE+1)*MPAGE<n){ s_msel+=MPAGE; if(s_msel>=n) s_msel=n-1; }
     }
-    if(s_nmods==0){ text(ROW0+6,C_TEXT,"No mods yet. Copy a romfs mod folder into"); text(ROW0+7,C_TEXT,"sdmc/aden/mods, then reopen this tab."); }
-    if(*cur==0){
-        text(ROW0+20,C_DIM,"Fruit, materials, flowers, shells... stack to 99.");
-        text(ROW0+21,C_DIM,"Turning it off splits bigger stacks in pockets and storage.");
-    }
-    if(pr(B_A) && *cur==0){
-        int on=!aden_stack99_on();
-        /* off: split stacks over the normal max first, or the game shows them as 1 */
-        if(!on){
-            int need, have, k=aden_split_stacks(item_stack,&need,&have);
-            if(k==-1){ if(g_player_state!=1) aden_player_find();
-                aden_snprintf(s_modmsg,sizeof s_modmsg,"Finding your player data to split stacks - press A again"); return; }
-            if(k==-2){ aden_snprintf(s_modmsg,sizeof s_modmsg,"Pockets or storage look wrong - Stack 99 stays ON"); return; }
-            if(k==-3){ aden_snprintf(s_modmsg,sizeof s_modmsg,"Need %d free slots (pockets+storage), have %d - Stack 99 stays ON",need,have); return; }
-            if(k>0) aden_log("stack 99 off: %d stacks split", k);
-        }
-        int n=aden_stack99_set(on);
-        if(n<0) aden_snprintf(s_modmsg,sizeof s_modmsg,"Stack 99 is now %s - restart the game to apply",on?"ON":"off");
-        else aden_snprintf(s_modmsg,sizeof s_modmsg,"Stack 99 is now %s (%d item kinds changed)",on?"ON":"off",n);
-    }
+    if(pr(B_A) && s_msel<0) stack99_toggle();
     else if(pr(B_A)){
-        Mod* m=&s_mods[*cur-1];
-        if(!m->romfs){ aden_snprintf(s_modmsg,sizeof s_modmsg, m->exefs?"%s is a code mod - turn it on in Eden instead":"%s has no romfs folder",m->name); }
+        Mod* m=&s_mods[s_msel];
+        if(!m->romfs) aden_snprintf(s_modmsg,sizeof s_modmsg, m->exefs?"%s is a code mod - turn it on in Eden instead":"%s has no romfs folder",m->name);
         else {
             m->on=!m->on; aden_mod_set(m->name,m->on);
             aden_snprintf(s_modmsg,sizeof s_modmsg,"%s is now %s - restart the game to apply",m->name,m->on?"ON":"off");
         }
     }
-    if(pr(B_Y)){ scan_mods(); if(*cur>s_nmods) *cur=s_nmods; if(*top>*cur) *top=*cur;   /* the list may have shrunk */
-        aden_snprintf(s_modmsg,sizeof s_modmsg,"%d mods found",s_nmods); }
-    text(26,C_DIM,"A on/off   Y rescan folder   B close");
-    if(s_modmsg[0]) text(ROW0+22,C_DIM,s_modmsg);
-}
-static void tab_about(void){
-    text(ROW0,C_TEXT,"Aden Modmenu v" ADEN_VERSION " for ACNH 3.0.2 / 3.0.3");
-    text(ROW0+2,C_DIM,"Open from the Nook Phone. B closes.");
-    text(ROW0+3,C_DIM,"Your character is paused while it is open.");
-    /* item icon test: the shovel drawn four ways; the right one is used by the Items grid */
-    static const u16 shovel=0x0833; static const char fam='M';
-    int on=aden_icons_on(), m=aden_icon_mode();
-    put(ROW0+5,0,C_TEXT,"Item icons (test): %s",on?"ON":"off");
-    text(ROW0+6,C_DIM,on?"A turns icons off. Left/Right picks the variant.":"A turns icons on.");
-    if(on){
-        aden_icons_want(1,&shovel,&fam); s_icon_test=1;
-        text(ROW0+7,C_DIM,"Pick the box where the shovel looks right.");
-        put(ROW0+15,0,C_TEXT,"     1             2             3             4");
-        put(ROW0+16,0,C_DIM,"Variant %d is used in the Items grid.",m+1);
-        if(pr(B_LEFT|S_LEFT)) aden_icon_mode_set((m+3)&3);
-        if(pr(B_RIGHT|S_RIGHT)) aden_icon_mode_set((m+1)&3);
+    /* Minus puts every changed mod back the way it was at start, so no restart is needed */
+    if(pr(B_MINUS)){
+        int k=0; for(int i=0;i<s_nmods;i++){ Mod* m=&s_mods[i]; if(m->on!=m->on_at_start){ m->on=m->on_at_start; aden_mod_set(m->name,m->on); k++; } }
+        aden_snprintf(s_modmsg,sizeof s_modmsg,k?"%d change%s undone - no restart needed":"Nothing to undo",k,k==1?"":"s");
     }
-    if(pr(B_A)){ if(on) aden_icons_disable(); else aden_icons_enable(); }
+    if(pr(B_Y)){ scan_mods(); if(s_msel>=s_nmods) s_msel=s_nmods-1;   /* the list may have shrunk */
+        aden_snprintf(s_modmsg,sizeof s_modmsg,"%d mods found",s_nmods); }
+    n=s_nmods;
+    at(1,11,C_TEXT,"Stack 99 (built-in)");
+    at(2,11,C_DIM,"Fruit, materials, shells stack to 99");
+    at_r(1,62,C_HEADDK,"%s",aden_stack99_found()?"live":"next start");
+    at(4,1,C_TEXT,"Folder mods  %d",n);
+    if(!n){
+        at(13,26,C_TEXT,"No mods yet");
+        at(15,18,C_DIM,"Copy a romfs mod folder into");
+        at(16,18,C_TEXT,"sdmc/aden/mods/<name>/romfs");
+        at(18,21,C_DIM,"Y rescans the folder.");
+    }
+    int pg= s_msel<0 ? 0 : s_msel/MPAGE;
+    for(int i=0;i<MPAGE && pg*MPAGE+i<n;i++){
+        Mod* m=&s_mods[pg*MPAGE+i]; int c=1+22*(i%3), r=6+5*(i/3);
+        char ini[3]; initials(m->name,ini);
+        at(r,c,C_WHITE,"%s",ini);
+        char nm[17]; int l=(int)strlen(m->name); memcpy(nm,m->name,l>16?16:l); nm[l>16?16:l]=0; if(l>16) nm[15]='.';
+        at(r+1,c,m->romfs?C_TEXT:C_DIM,"%s",nm);
+        if(m->on!=m->on_at_start) at(r+2,c,C_WARN,"restart needed");
+        else if(!m->romfs) at(r+2,c,C_DIM,"%s",m->exefs?"code mod: use Eden":"no romfs folder");
+        else if(m->exefs) at(r+2,c,C_DIM,"romfs only");
+    }
+    int pend=mods_pending();
+    if(pend){ at(20,2,C_TEXT,"%d change%s for a restart",pend,pend==1?" waits":"s wait"); at_r(20,61,C_TEXT,"- undo"); }
+    if(s_modmsg[0]) at(22,0,C_DIM,"%s",s_modmsg);
+    text(26,C_DIM,"D-pad move  ZL/ZR page  A on/off  - undo  Y rescan");
+    s_status_row=23;
+    s_paint=paint_mods;
 }
 
-/* panel geometry (720p units, origin centre, y up) */
-#define PX0  -625.f
-#define PW    570.f
-#define PY0   350.f
-#define PH    700.f
-#define HEADH 100.f
-#define TX   (PX0+30.f)
-#define CY   (PY0-HEADH-16.f)
-#define TABX0 (TX+8.f)      /* x of the first tab name */
+/* ---------- About tab: a rail of pages (ZL/ZR) - Info, Controls, Icon check, Credits ---------- */
+static int s_apage, s_akey;
+static const char* const APAGE[4]={"Info","Controls","Icon check","Credits"};
+static const char* const KEYN[8]={"A","B","X","Y","L/R","ZL/ZR","-/+","D-pad"};
+static const char* const KEYD[8]={"use / toggle","close menu","pockets/storage","search items","change tab","page, family","amount","move"};
+static const char* const IMODE[4]={"lower-left, 0-1","upper-left, 0-1","lower-left, texels","upper-left, texels"};
+static const u16 SHOVEL=0x0833; static const char SHOVEL_FAM='M';
+static u32 state_col(int st){ return st==2 ? C_OK : st==1 ? C_HEAD : st==3 ? C_WARN : C_OFF; }
+static void paint_about(void){
+    box(16,108,150,440,18,C_WELL);
+    box(22,GY(2*s_apage)-5,138,30,15,C_WHITE);
+    if(s_apage==0){
+        box(184,184,366,96,16,C_WHITE);
+        dot(206,GY(4)+8,6,state_col(g_player_state));
+        dot(206,GY(5)+8,6,state_col(g_player_state==2?g_island_state:0));
+        dot(206,GY(6)+8,6,aden_icons_on()?C_OK:C_OFF);
+        dot(206,GY(7)+8,6,C_HEAD);
+    } else if(s_apage==1){
+        /* a Switch pad from disks and rounded boxes; the chosen key gets a yellow halo */
+        int k=s_akey;
+        static const float BTN[4][2]={{498,205},{474,225},{474,185},{450,205}};   /* A B X Y */
+        if(k==4||k==5){ box(220,107,108,36,18,C_PILL); box(404,107,108,36,18,C_PILL); }
+        box(226,112,96,26,13,C_TEXT); box(410,112,96,26,13,C_TEXT);
+        dot(252,262,42,C_BODY); dot(482,262,42,C_BODY); box(196,144,342,124,58,C_BODY);
+        dot(258,192,20,C_TEXT); dot(258,192,12,C_STICK); dot(434,244,20,C_TEXT); dot(434,244,12,C_STICK);
+        if(k==7) dot(300,238,28,C_PILL);
+        dot(300,222,9,C_TEXT); dot(300,254,9,C_TEXT); dot(284,238,9,C_TEXT); dot(316,238,9,C_TEXT);
+        if(k==6){ dot(338,185,13,C_PILL); dot(394,185,13,C_PILL); }
+        dot(338,185,8,C_TEXT); dot(394,185,8,C_TEXT);
+        for(int b=0;b<4;b++){ if(k==b) dot(BTN[b][0],BTN[b][1],15,C_PILL); dot(BTN[b][0],BTN[b][1],10,C_TEXT); }
+        box(k<4?190:374,GY(10+k%4)-3,176,22,11,C_PILL);
+    } else if(s_apage==2){
+        int on=aden_icons_on(), m=aden_icon_mode();
+        box(200,148,150,150,24,on?C_WELL:C_EMPTY);
+        if(on) aden_icon_draw(SHOVEL,SHOVEL_FAM,WX(215),WY(163),120,120,m);
+        for(int v=0;v<4;v++){
+            float x=200+96*v;
+            if(on && v==m) box(x-6,304,64,64,16,C_PILL);
+            box(x,310,52,52,0,on?C_WELL:C_EMPTY);
+            if(on) aden_icon_draw(SHOVEL,SHOVEL_FAM,WX(x+5),WY(315),42,42,v);
+        }
+    }
+}
+static void tab_about(void){
+    if(pr(B_ZL)) s_apage=(s_apage+3)%4;
+    if(pr(B_ZR)) s_apage=(s_apage+1)%4;
+    for(int i=0;i<4;i++) at(2*i,1,i==s_apage?C_HEADDK:C_TEXT,"%s",APAGE[i]);
+    at(19,1,C_DIM,"v%s",ADEN_VERSION); at(20,1,C_DIM,"ZL/ZR: page");
+    const char* hint="ZL/ZR page   L/R tabs   B close";
+    if(s_apage==0){
+        big(198,120,1.6f,C_TEXT,"v%s",ADEN_VERSION);
+        at(2,21,C_DIM,"for ACNH 3.0.2 / 3.0.3");
+        int ps=g_player_state, is=g_island_state;
+        at(4,23,C_TEXT,"Player data");
+        if(ps==2){ int n=aden_player_count(); at(4,38,C_DIM,"found, %d player%s",n,n==1?"":"s"); }
+        else at(4,38,ps==3?C_WARN:C_DIM,"%s",ps==1?"searching":ps==3?"not found":"not searched yet");
+        at(5,23,C_TEXT,"Island");
+        at(5,38,ps==2&&is==3?C_WARN:C_DIM,"%s",ps!=2||is==0?"waiting":is==1?"searching":is==2?"found":"not found");
+        at(6,23,C_TEXT,"Item icons");
+        if(aden_icons_on()) at(6,38,C_DIM,"ON, variant %d",aden_icon_mode()+1); else at(6,38,C_DIM,"off");
+        at(7,23,C_TEXT,"Log file"); at(7,38,C_DIM,"sdmc:/aden/log.txt");
+        at(9,21,C_HEADDK,"How to use");
+        at(10,21,C_DIM,"Open it from the Nook Phone.");
+        at(11,21,C_DIM,"B closes it. L/R changes tab.");
+        at(12,21,C_DIM,"Your character is paused while it is open.");
+    } else if(s_apage==1){
+        if(up() && s_akey>0) s_akey--;
+        if(down() && s_akey<7) s_akey++;
+        at(0,28,C_WHITE,"L  ZL"); at(0,51,C_WHITE,"R  ZR");
+        at(3,38,C_WHITE,"-"); at(3,45,C_WHITE,"+");
+        at(3,55,C_WHITE,"X"); at(4,52,C_WHITE,"Y"); at(4,58,C_WHITE,"A"); at(5,55,C_WHITE,"B");
+        for(int i=0;i<8;i++){ int c= i<4 ? 21 : 44;
+            at(10+i%4,c,C_HEADDK,"%s",KEYN[i]); at(10+i%4,c+7,C_TEXT,"%s",KEYD[i]); }
+        at(15,21,C_DIM,"Up/Down picks a key; it lights on the pad.");
+        hint="Up/Down key   ZL/ZR page   B close";
+    } else if(s_apage==2){
+        int on=aden_icons_on(), m=aden_icon_mode();
+        at(0,21,C_TEXT,on?"Does the shovel look right?":"Item icons are off.");
+        if(on){
+            aden_icons_want(1,&SHOVEL,&SHOVEL_FAM);
+            at(2,44,C_TEXT,"Variant %d of 4",m+1); at(3,44,C_DIM,"%s",IMODE[m]);
+            at(5,44,C_TEXT,"A  icons off"); at(6,44,C_TEXT,"</> next variant"); at(7,44,C_DIM,"Saved on the SD");
+            if(left())  aden_icon_mode_set((m+3)&3);
+            if(right()) aden_icon_mode_set((m+1)&3);
+        } else {
+            at(5,30,C_DIM,"?");
+            at(2,44,C_TEXT,"A turns them on"); at(3,44,C_DIM,"to start the check.");
+        }
+        for(int v=0;v<4;v++) at(13,24+12*v,on?C_TEXT:C_DIM,"%d",v+1);
+        at(15,21,C_DIM,"The Items grid uses this variant.");
+        at(17,21,C_DIM,"If icons crash the game, they turn");
+        at(18,21,C_DIM,"off by themselves at the next start.");
+        if(pr(B_A)){ if(on) aden_icons_disable(); else aden_icons_enable(); }
+        hint="A on/off   Left/Right variant   ZL/ZR page";
+    } else {
+        at(0,21,C_TEXT,"Aden Modmenu"); at(1,21,C_DIM,"v%s for ACNH 3.0.2 / 3.0.3",ADEN_VERSION);
+        at(3,21,C_DIM,"Built by"); at(4,21,C_TEXT,"AdenDev");
+        at(6,21,C_DIM,"Item names and data"); at(7,21,C_TEXT,"NHSE by kwsch");
+        at(9,21,C_DIM,"License"); at(10,21,C_TEXT,"GPL-3.0");
+        at(12,21,C_DIM,"Found a bug? Send this file:"); at(13,21,C_TEXT,"sdmc:/aden/log.txt");
+    }
+    text(26,C_DIM,hint);
+    s_paint=paint_about;
+}
 
 /* grid geometry, panel coordinates (x right from PX0, y down from PY0) */
 #define GX0   40.f
@@ -595,14 +1001,6 @@ static void draw_grid_text(void){
     for(int c=0;c<GCOLS;c++) gfx_text(PX0+GX0+c*GPITCH+1,PY0-GY0-50,1.0f,C_TEXT,s_glab[c]);
     gfx_text(PX0+466-strlen(s_famtxt)*4.f,PY0-118,1.0f,0xFFFFFFFF,s_famtxt);
 }
-static void draw_icon_test(void){
-    for(int k=0;k<4;k++){
-        float x=PX0+40+k*112, y=36;
-        if(k==aden_icon_mode()) gfx_rrect(x-6,y+6,84,84,20,C_PILL);
-        gfx_rect(x,y,72,72,C_TILE);
-        aden_icon_draw(0x0833,'M',x+8,y-8,56,56,k);
-    }
-}
 static void draw_chrome(void){
     gfx_prim_begin();
     gfx_rrect(PX0,PY0,PW,PH,34,C_PANEL);                 /* cream card */
@@ -615,13 +1013,13 @@ static void draw_chrome(void){
         pos+=strlen(TABNAME[i])+5;
     }
     if(s_grid_on) draw_grid();
-    if(s_icon_test) draw_icon_test();
     for(int i=0;i<s_nicons;i++) draw_icon(TX+9,CY-s_icons[i].row*20-8,s_icons[i].st);
     if(s_hl_row>=0){
         if(s_hl_key>=0) gfx_rrect(TX+s_hl_key*24-2,CY-s_hl_row*20+3,28,22,11,C_PILL);
         else            gfx_rrect(PX0+16,CY-s_hl_row*20+3,PW-32,22,11,C_PILL);
     }
     if(!s_grid_on) gfx_rect(PX0+20,CY-25*20+6,PW-40,2,C_LINE);   /* footer divider (the grid fills that space) */
+    if(s_paint) s_paint();
 }
 /* two prints for the whole tab row: the inactive names (and L/R) padded with spaces, then the active one */
 static void draw_tabs_text(void){
@@ -643,11 +1041,11 @@ void aden_menu_draw(void){
     poll();
     /* ignore input until every button from the phone tap has been released */
     if(!s_armed){ if(s_now==0) s_armed=1; s_press=0; }
-    if(!s_typing){
+    if(!s_typing && !s_pedit){
         if(pr(B_L)) s_tab=(s_tab+NTABS-1)%NTABS;
         if(pr(B_R)) s_tab=(s_tab+1)%NTABS;
     }
-    s_hl_row=-1; s_hl_key=-1; s_grid_on=0; s_nicons=0; s_frame++; s_icon_test=0;
+    s_hl_row=-1; s_hl_key=-1; s_grid_on=0; s_nicons=0; s_frame++; s_paint=0; s_status_row=ROW0+LIST+4;
     switch(s_tab){
         case TAB_ITEMS:  tab_items(); break;
         case TAB_PLAYER: tab_player(); break;
@@ -655,11 +1053,12 @@ void aden_menu_draw(void){
         case TAB_MODS:   tab_mods(); break;
         case TAB_ABOUT:  tab_about(); break;
     }
-    if(s_status[0]) put(ROW0+LIST+4,0,C_WARN,"%s",s_status);
+    if(s_status[0]) put(s_status_row,0,C_WARN,"%s",s_status);
     draw_chrome();
     gfx_text(TX,PY0-18,1.6f,C_TITLE,"Aden Modmenu");
     draw_tabs_text();
     flush(TX,CY);
+    flush_big();
     if(s_grid_on) draw_grid_text();
-    if(pr(B_B) && !s_typing){ g_input_hold=1; g_menu_open=0; g_aden_open_request=0; s_status[0]=0; aden_log("menu closed"); }
+    if(pr(B_B) && !s_typing && !s_pedit){ g_input_hold=1; g_menu_open=0; g_aden_open_request=0; s_status[0]=0; aden_log("menu closed"); }
 }

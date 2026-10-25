@@ -308,6 +308,24 @@ int aden_pocket_add(u16 id, int qty, int stack){
     aden_log("pocket add %04X: placed %d", id, placed);
     return placed;
 }
+/* pocket slots the upgrades unlocked (smallest of all copies), -1 not ready */
+int aden_pocket_slots(void){
+    if(!aden_player_ready()) return -1;
+    u32 size=pocket_size(s_copy[0]);
+    for(int c=1;c<s_ncopies;c++){ u32 z=pocket_size(s_copy[c]); if(z<size) size=z; }
+    return size>40 ? 40 : (int)size;
+}
+/* pocket slots empty in every copy (the slots aden_pocket_add would fill), -1 not ready */
+int aden_pocket_free(void){
+    if(!aden_player_ready()) return -1;
+    u32 size=pocket_size(s_copy[0]);
+    for(int c=1;c<s_ncopies;c++){ u32 z=pocket_size(s_copy[c]); if(z<size) size=z; }
+    int n=0;
+    for(u32 i=0;i<size && i<40;i++){ int c=0;
+        while(c<s_ncopies && *(u16*)(i<20 ? s_copy[c]+i*8 : s_copy[c]-0xB8+(i-20)*8)==0xFFFE) c++;
+        if(c==s_ncopies) n++; }
+    return n;
+}
 
 /* =====================================================================
    Whole-save features. The game keeps each save file in memory with the
@@ -506,6 +524,7 @@ int aden_reactions_learn_all(void){
     aden_log("reactions: added %d in %d copies", added, s_npb);
     return added;
 }
+int aden_reactions_total(void){ return g_nreactions; }
 int aden_reactions_known(void){
     if(!pers_ok() || !range_rw(s_pb[0]+PERS_MANPU,256)) return 0; const u8* M=(const u8*)(s_pb[0]+PERS_MANPU); int n=0;
     for(int i=0;i<256;i++) if(M[i] && M[i]<=120) n++;
@@ -611,6 +630,12 @@ int aden_split_stacks(int (*maxof)(u16), int* need, int* have){
 #define KABU_MON 3
 u32 aden_turnip_sell(void){ return s_nmb && heap_rw(s_mb[0]+MAIN_KABU,16) ? *(u32*)(s_mb[0]+MAIN_KABU+KABU_MON*4) : 0; }
 u32 aden_turnip_buy(void){ return s_nmb && heap_rw(s_mb[0]+MAIN_KABU,8) ? *(u32*)(s_mb[0]+MAIN_KABU) : 0; }
+/* the 12 sell prices, Monday AM .. Saturday PM; 0 if the island data is not ready */
+int aden_turnip_week(u32* out){
+    if(!s_nmb || !heap_rw(s_mb[0]+MAIN_KABU,15*4)){ for(int i=0;i<12;i++) out[i]=0; return 0; }
+    for(int i=0;i<12;i++) out[i]=*(u32*)(s_mb[0]+MAIN_KABU+(KABU_MON+i)*4);
+    return 1;
+}
 void aden_turnip_set(int sell,u32 v){
     for(int c=0;c<s_nmb;c++){ u32* k=(u32*)(s_mb[c]+MAIN_KABU); if(!heap_rw((uptr)k,15*4)) continue;
         if(sell) for(int i=KABU_MON;i<15;i++) k[i]=v; else k[0]=v; }
@@ -634,6 +659,12 @@ int aden_villager_info(int k,const char** name,int* friendship,int* moving){
     int j=my_mem(V); *friendship = j<0 ? -1 : *(u8*)(V+4+j*MEM_SIZE+0x38+10);
     *moving = (*(u8*)(V+0x1267a)&2)!=0;
     return 1;
+}
+/* NHSE VillagerSpecies (0 anteater .. 34 wolf), -1 for an empty house */
+int aden_villager_species(int k){
+    if(!s_nmb || k<0 || k>=VILL_N) return -1;
+    uptr V=vill(0,k); if(!heap_rw(V,VILL_SIZE)) return -1;
+    u8 sp=*(u8*)V; return sp<35 ? sp : -1;
 }
 void aden_villager_friend(int k,u8 v){
     if(k<0 || k>=VILL_N) return;

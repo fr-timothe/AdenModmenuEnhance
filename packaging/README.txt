@@ -26,14 +26,21 @@ CONTROLS (menu open)
   B                close the menu
   Items:  arrows move in the grid, ZL/ZR item family, -/+ amount, Y search, X pockets or storage, A give
           Items from DLC you do not own are not listed.
-  Player: Minus searches your player data again (after switching resident)
-  Player/Island: Left/Right and ZL/ZR change the value, X max, Y zero, A on actions
+  Player: Up/Down picks a row (resident, money, unlocks), Left/Right an entry in it.
+          On money: ZL/ZR big step, X max, Y zero, A opens the digits (Left/Right pick a
+          digit, Up/Down change it, A or B done). Minus searches your player data again.
+          Limits: wallet 99,999 Bells, Nook Miles 9,999,999, bank 999,999,999, Poki 9,999,999.
+  Island: Up/Down picks a price or a villager. Prices: Left/Right +-10, ZL/ZR +-100,
+          X best natural price, Y zero. Villager: A best friend, Y reset, X moving out.
+  Mods:   arrows move between cards, ZL/ZR page, A on/off, Minus undoes every change
+          since the game started, Y rescans the folder.
+  About:  ZL/ZR changes page (Info, Controls, Icon check, Credits).
 
 MOD MANAGER
 - Put romfs mods in sdmc/aden/mods/<ModName>/romfs/...
 - A turns a mod on/off; restart the game to apply. Y rescans the folder.
 - Code mods (exefs / .pchtxt / .ips) can't be loaded in-game: turn those on in Eden.
-- Stack 99 (first row, built in): fruit, materials, flowers, shells and other safe items
+- Stack 99 (top banner, built in): fruit, materials, flowers, shells and other safe items
   stack to 99, like the Stack99 mod by PlebGeneral. "live" means the switch acts right away;
   "next start" means it applies when the game restarts. Turning it off splits stacks bigger
   than the normal max in your pockets and home storage (it needs enough free slots, or it stays
@@ -41,7 +48,7 @@ MOD MANAGER
 
 ITEM ICONS (test, game 3.0.3)
 - The Items grid shows the game's own item icons, loaded only for the page on screen.
-- About tab: the shovel is drawn four ways. Pick with Left/Right the box where it looks right;
+- About tab, Icon check page: the shovel is drawn four ways. Pick with Left/Right the box where it looks right;
   that variant is used in the grid. A turns icons on/off.
 - If the game stops while icons are first drawn, icons turn themselves off at the next start.
   Send sdmc/aden/log.txt with a report.
