@@ -13,7 +13,7 @@
 #define REQ_PER_TICK  4
 #define LOAD_TIMEOUT  600      /* ticks (frames) before a load counts as failed */
 #define KEEP_TICKS    8        /* an icon off screen this long may be released (GPU frames in flight) */
-#define TRY_FILE  "adensd:/aden/icons_trying"   /* exists while the first draws of a session run */
+#define TRY_FILE  "adensd:/aden/icons_trying"   /* exists while icons start (first 300 frames) and first draw */
 #define OFF_FILE  "adensd:/aden/icons_off"      /* icons turned off (by the user or after a crash) */
 #define MODE_FILE "adensd:/aden/icon_mode"      /* draw variant 0-3 picked in the About tab */
 
@@ -39,11 +39,19 @@ static int s_sampler_id; static u32 s_tick;
 static volatile u32 s_want[ICON_N]; static volatile int s_nwant; static volatile u32 s_want_frame;
 extern volatile u32 g_render_frame;
 static u32 s_last_frame;
+static u32 s_draws; static int s_trying;
 static int s_mode=-1;
 static int s_logged;           /* first few icons are logged step by step */
 
 static int file_exists(const char* p){ FsFile f; if(nn_fs_OpenFile(&f,p,FS_READ)) return 0; nn_fs_CloseFile(f); return 1; }
 static u64 tls(void){ u64 v; __asm__ volatile("mrs %0, tpidrro_el0":"=r"(v)); return v; }
+/* each first call into the game is logged and written to the SD card before it runs,
+   so a log that ends here names the call the game stopped in (beta.10 crashed with no clue) */
+static u32 s_staged;
+static void stage(int bit,const char* what){
+    if(s_staged&(1u<<bit)) return; s_staged|=1u<<bit;
+    aden_log("icons: %s (thread %lx)", what, tls()); aden_log_flush();
+}
 
 /* the icon kind the game uses for an item: furniture art, clothing, recipe card, or the pocket icon */
 static u32 kind_of(u16 id,char fam){ return id==0x16A2 ? 11 : fam=='F' ? 1 : fam=='C' ? 10 : 0; }
@@ -53,7 +61,7 @@ static int icons_off(void){
     if(s_off<0 && aden_sd_ready()){
         if(file_exists(TRY_FILE)){
             nn_fs_DeleteFile(TRY_FILE); nn_fs_CreateFile(OFF_FILE,0);
-            aden_log("icons: the last session stopped while drawing icons - icons turned off (About tab turns them on)");
+            aden_log("icons: the last session stopped while loading or drawing icons - icons turned off (About tab turns them on)");
         }
         s_off=file_exists(OFF_FILE);
         if(s_off) aden_log("icons: off (sdmc/aden/icons_off)");
@@ -61,14 +69,19 @@ static int icons_off(void){
     return s_off!=0;
 }
 static int start(void){
+    nn_fs_CreateFile(TRY_FILE,0);   /* removed after 300 frames without a crash */
+    stage(0,"start: checking game code");
     for(unsigned i=0;i<sizeof CHECK/sizeof CHECK[0];i++){
         const u32* w=(const u32*)AT(CHECK[i].off);
         if(w[0]!=CHECK[i].w0 || w[1]!=CHECK[i].w1){ aden_log("icons: game code differs at main+%x - icons off (3.0.3 only)", CHECK[i].off); return -1; }
     }
     if(!*(u64*)AT(D_DRAWTEX) || !*(u64*)AT(D_GETHANDLE) || !*(u64*)AT(D_GFX)){ aden_log("icons: graphics functions not loaded - icons off"); return -1; }
     /* one sampler for every icon */
+    stage(1,"sampler: constructor");
     ((void(*)(void*))AT(A_SMP_CTOR))(s_sampler);
+    stage(2,"sampler: descriptor");
     ((void(*)(void*,int))AT(A_SMP_UPD))(s_sampler,0x3e);
+    stage(3,"slots: constructor");
     s_sampler_id=*(s16*)(s_sampler+0xda);
     for(int i=0;i<ICON_N;i++){
         u8* s=s_slot[i]; memset(s,0,SLOT_SIZE);
@@ -93,6 +106,7 @@ static void slot_release(int i){
 }
 static void request(int i,u32 key){
     u8* s=s_slot[i]; u32 item[2]={key&0xFFFF,0};
+    stage(4,"slot: first request");
     s_ic[i].key=key; s_ic[i].ticks=0; s_ic[i].seen=s_tick;
     ((void(*)(void*,void*,const void*,u32))AT(A_REQ))(s,(void*)AT(D_EMPTYSTR),item,key>>16);
     s_ic[i].st=I_LOAD;
@@ -101,9 +115,11 @@ static void request(int i,u32 key){
 static void ready(int i){
     u8* s=s_slot[i]; u8* td=s_ic[i].td;
     memset(td,0,sizeof s_ic[i].td); *(int*)(td+0x50)=-1; *(const char**)(td+0x90)="agl::TextureData"; *(u32*)(td+0x98)=0x10000;
+    stage(7,"slot: first texture read");
     if(!((u8(*)(void*,void*,void*))AT(A_GETTEX))(s,s+0x148,td) || *(int*)(td+0x50)<0){
         s_ic[i].st=I_FAIL; aden_log("icons: %04X loaded but has no texture", s_ic[i].key&0xFFFF); return; }
     void* dev=*(void**)(*(u64*)AT(D_GFX)+0x30);
+    stage(8,"first texture handle");
     u64 h=((u64(*)(void*,int,int))*(u64*)AT(D_GETHANDLE))(dev,*(int*)(td+0x50),s_sampler_id);
     s_ic[i].handle=h; __atomic_store_n(&s_ic[i].st,I_READY,__ATOMIC_RELEASE);
     if(s_logged<4){ s_logged++; aden_log("icons: %04X ready after %u frames: %ux%u, texture %d, handle %lx",
@@ -115,13 +131,15 @@ HIDDEN void aden_icons_tick(void){
     int nw= f-s_want_frame<30 && !icons_off() ? s_nwant : 0;   /* the menu stopped asking: nothing is on screen */
     if(!s_state){ if(!nw) return; int r=start(); if(!r) return; s_state=r; if(r<0) return; }
     s_tick++;
+    if(s_tick==300 && !s_draws){ nn_fs_DeleteFile(TRY_FILE); aden_log("icons: 300 frames of loading, no crash"); }
     for(int i=0;i<ICON_N;i++){
         if(s_ic[i].st==I_FREE && slot_idle(i)) continue;
         u8* s=s_slot[i];
+        stage(5,"slot: first step");
         ((void(*)(void*))AT(A_STEP))(s);
         if(s_ic[i].st==I_LOAD){
             s_ic[i].ticks++;
-            if(*(u32*)(s+0x1a0)==1 && (s[0x18]&2) && *(int*)(s+0x100)!=1 && ((u8(*)(void*))AT(A_FINISH))(s)){ *(u32*)(s+0x1a0)=2; ready(i); }
+            if(*(u32*)(s+0x1a0)==1 && (s[0x18]&2) && *(int*)(s+0x100)!=1 && (stage(6,"slot: first load check"),((u8(*)(void*))AT(A_FINISH))(s))){ *(u32*)(s+0x1a0)=2; ready(i); }
             else if(s_ic[i].ticks>LOAD_TIMEOUT){ s_ic[i].st=I_FAIL; aden_log("icons: %04X kind %u did not load", s_ic[i].key&0xFFFF, s_ic[i].key>>16); }
         }
         /* a failed load that completes late still holds its archive: let it go */
@@ -169,13 +187,12 @@ HIDDEN void aden_icons_enable(void){ nn_fs_DeleteFile(OFF_FILE); nn_fs_DeleteFil
 HIDDEN void aden_icons_disable(void){ nn_fs_CreateFile(OFF_FILE,0); s_off=1; aden_log("icons: turned off"); }
 void gfx_texture(u64 handle,float x,float y,float w,float h,int mode);   /* gfx.c */
 /* draws the icon of id/fam in the box (menu space, top-left corner, y up); 0 if it is not ready */
-static u32 s_draws; static int s_trying;
 HIDDEN int aden_icon_draw(u16 id,char fam,float x,float y,float w,float h,int mode){
     if(s_state<=0 || s_off) return 0;
     u32 key=id|kind_of(id,fam)<<16;
     for(int i=0;i<ICON_N;i++) if(s_ic[i].key==key && __atomic_load_n(&s_ic[i].st,__ATOMIC_ACQUIRE)==I_READY){
         /* the first draws of a session are guarded: a crash leaves the marker and turns icons off */
-        if(!s_draws){ nn_fs_CreateFile(TRY_FILE,0); s_trying=1; aden_log("icons: first draw (variant %d)", mode); aden_log_flush(); }
+        if(!s_draws){ nn_fs_CreateFile(TRY_FILE,0); s_trying=1; stage(9,"first draw"); }
         gfx_texture(s_ic[i].handle,x,y,w,h,mode);
         if(s_trying && ++s_draws>300){ nn_fs_DeleteFile(TRY_FILE); s_trying=0; aden_log("icons: 300 draws done, no crash"); }
         else if(!s_trying) s_draws++;

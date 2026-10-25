@@ -8,7 +8,7 @@ typedef u64 uptr; typedef u64 size_t; typedef u32 Handle; typedef u32 Result;
 #define ALIGN_UP(x,a) ALIGN_DOWN((x)+(a)-1,(a))
 #define PAGE 0x1000UL
 #define CUR_PROCESS_HANDLE 0xFFFF8001
-#define ADEN_VERSION "0.6.0-beta.10"   /* release version: start-up log and About tab */
+#define ADEN_VERSION "0.6.0-beta.11"   /* release version: start-up log and About tab */
 
 /* search progress shown by the menu's loading page (player.c writes, menu.c reads) */
 enum { STEP_MEM, STEP_GPU, STEP_STATS, STEP_PERS, STEP_ISLAND, NSTEPS };
