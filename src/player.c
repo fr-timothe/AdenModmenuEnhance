@@ -168,7 +168,7 @@ static void scan_players(int dev, int* empty){
         if(!dev && (mi.perm&3)==3 && mi.type==5 && !MI_PLAIN(mi)){ s_skip_n[mi.attr&7]++; s_skip_mb[mi.attr&7]+=mi.size; }
         if(scan_ok(&mi,dev)){
             for(uptr P=mi.addr+0x20; P+0xC0<end; P+=8){
-                if(!(P&(SCAN_CHUNK-1)) && (!scan_nap(P,&end,dev) || P+0xC0>=end)) break;
+                if(!(P&(SCAN_CHUNK-1))){ g_scan_mb+=SCAN_CHUNK>>20; if(!scan_nap(P,&end,dev) || P+0xC0>=end) break; }
                 if(!count1_ok(*(u32*)(P+0xA0)) || !count2_ok(*(u32*)(P-0x18))) continue;
                 if(!sig_ok(P)) continue;
                 if(base_ok(P)){
@@ -187,20 +187,30 @@ static void scan_players(int dev, int* empty){
         a=end;
     }
 }
+static uptr s_pb[MAXF]; static int s_npb;          /* personal save bases */
+volatile int g_step[NSTEPS]; volatile u32 g_step_n[NSTEPS]; volatile u32 g_scan_mb;
+static void step(int i,int st,u32 n){ g_step_n[i]=n; __atomic_store_n(&g_step[i],st,__ATOMIC_RELEASE); }
 static void find_thread(void* arg){
     (void)arg;
+    for(int i=0;i<STEP_ISLAND;i++) step(i,ST_WAIT,0);
+    g_scan_mb=0; step(STEP_MEM,ST_RUN,0);
     s_ncopies=0; s_ncand=0; s_nplayers=0; s_active=0;
     int empty=0; u64 t0=nn_os_GetSystemTick(); s_attr_rej=0; memset(s_skip_mb,0,sizeof s_skip_mb); memset(s_skip_n,0,sizeof s_skip_n);
     scan_players(0,&empty);
     aden_log("search: %d players, %d empty slots, %d other pocket matches, %lu ms", s_nplayers, empty, s_ncand, (nn_os_GetSystemTick()-t0)/19200);
     if(s_attr_rej) aden_log("search: %d pockets skipped for memory attributes (last attr %x)", s_attr_rej, s_attr_last);
     for(int i=0;i<8;i++) if(s_skip_n[i]) aden_log("search: skipped heap with attr %x: %d regions, %lu MB", i, s_skip_n[i], s_skip_mb[i]>>20);
-    if(!s_nplayers){
+    step(STEP_MEM,s_nplayers?ST_OK:ST_FAIL,s_nplayers);
+    if(s_nplayers) step(STEP_GPU,ST_SKIP,0);
+    else {
+        step(STEP_GPU,ST_RUN,0); g_scan_mb=0;
         /* nothing in plain memory: read the GPU-mapped heap too (may lower FPS on Eden with Reactive Flushing on) */
         t0=nn_os_GetSystemTick(); empty=0;
         scan_players(1,&empty);
         aden_log("search (DeviceShared heap): %d players, %d empty slots, %d other pocket matches, %lu ms", s_nplayers, empty, s_ncand, (nn_os_GetSystemTick()-t0)/19200);
+        step(STEP_GPU,s_nplayers?ST_OK:ST_FAIL,s_nplayers);
     }
+    step(STEP_STATS,ST_RUN,0); step(STEP_PERS,ST_RUN,0);
     if(s_nplayers){
         /* default to the player with the most copies in memory: that is the one being played.
            A tie goes to the lowest PlayerID, so the guess does not depend on where memory landed. */
@@ -217,6 +227,8 @@ static void find_thread(void* arg){
         aden_log("fallback: %d pocket copies from %d matches (cap %d)", s_ncopies, s_ncand, MAXCOPIES);
         find_fields(); find_personal_bases();
     }
+    int nf=0; for(int f=0;f<3;f++) if(s_fields[f].n) nf++;
+    step(STEP_STATS,nf?ST_OK:ST_FAIL,nf); step(STEP_PERS,s_npb?ST_OK:ST_FAIL,s_npb);
     g_player_state = s_ncopies ? 2 : 3;
     aden_log("player search done: %d copies", s_ncopies);
 }
@@ -242,7 +254,6 @@ void aden_player_find(void){
 /* re-check cached copies (memory can move after loading screens). One bad copy means the
    others may be old save buffers too: stop writing at once and, if it lasts (not just a
    write caught half-way), drop everything derived from the copies and search again. */
-static uptr s_pb[MAXF]; static int s_npb;          /* personal save bases */
 static uptr s_mb[4]; static int s_nmb;             /* island (main) save bases */
 #define STALE_CHECKS 8
 static int range_rw(uptr a, uptr len);
@@ -372,7 +383,7 @@ static void find_main(void){
                (graphics, shared, transfer buffers) can disappear under us */
             if(scan_ok(&mi,dev)){
                 for(uptr x=mi.addr; x+24<=end; x+=4){
-                    if(!(x&(SCAN_CHUNK-1)) && (!scan_nap(x,&end,dev) || x+24>end)) break;
+                    if(!(x&(SCAN_CHUNK-1))){ g_scan_mb+=SCAN_CHUNK>>20; if(!scan_nap(x,&end,dev) || x+24>end) break; }
                     if(*(u32*)x!=tid || memcmp((void*)x,town,24)) continue;
                     hits++;
                     uptr M=x-(MAIN_VILL+4);
@@ -398,6 +409,7 @@ static void find_main(void){
             a=end;
         }
     }
+    step(STEP_ISLAND,nmb?ST_OK:ST_FAIL,nmb);
     aden_log("island search: %d town-id hits, %d saves, %lu ms", hits, nmb, (nn_os_GetSystemTick()-t0)/19200);
     /* the render thread leaves s_mb alone while we run, so we are its only writer here */
     int st = nmb ? 2 : 3;
@@ -414,9 +426,10 @@ void aden_island_find(void){
     /* never wait on a running thread from the render thread: retry on a later frame once it has exited */
     if(__atomic_load_n(&s_th2_run,__ATOMIC_ACQUIRE)) return;
     if(s_th2_used){ nn_os_WaitThread(&s_th2); nn_os_DestroyThread(&s_th2); s_th2_used=0; }
-    if(!pers_ok() || !range_rw(s_pb[0],16) || !range_rw(s_pb[0]+PERS_ID,24)){ s_nmb=0; g_island_state=3; return; }
+    if(!pers_ok() || !range_rw(s_pb[0],16) || !range_rw(s_pb[0]+PERS_ID,24)){ step(STEP_ISLAND,ST_FAIL,0); s_nmb=0; g_island_state=3; return; }
     memcpy(s_town,(const void*)(s_pb[0]+PERS_ID),24); memcpy(s_ph,(const void*)s_pb[0],16);
-    if(!s_town[0]){ aden_log("no town id"); s_nmb=0; g_island_state=3; return; }
+    if(!s_town[0]){ aden_log("no town id"); step(STEP_ISLAND,ST_FAIL,0); s_nmb=0; g_island_state=3; return; }
+    g_scan_mb=0; step(STEP_ISLAND,ST_RUN,0);
     __atomic_store_n(&s_island_stale,0,__ATOMIC_SEQ_CST);
     g_island_state=1;
     __atomic_store_n(&s_th2_run,1,__ATOMIC_SEQ_CST);

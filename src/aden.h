@@ -8,7 +8,14 @@ typedef u64 uptr; typedef u64 size_t; typedef u32 Handle; typedef u32 Result;
 #define ALIGN_UP(x,a) ALIGN_DOWN((x)+(a)-1,(a))
 #define PAGE 0x1000UL
 #define CUR_PROCESS_HANDLE 0xFFFF8001
-#define ADEN_VERSION "0.6.0-beta.8"   /* release version: start-up log and About tab */
+#define ADEN_VERSION "0.6.0-beta.9"   /* release version: start-up log and About tab */
+
+/* search progress shown by the menu's loading page (player.c writes, menu.c reads) */
+enum { STEP_MEM, STEP_GPU, STEP_STATS, STEP_PERS, STEP_ISLAND, NSTEPS };
+enum { ST_WAIT, ST_RUN, ST_OK, ST_FAIL, ST_SKIP };
+extern volatile int g_step[NSTEPS];
+extern volatile u32 g_step_n[NSTEPS];    /* what the step found: players, stat fields, copies, saves */
+extern volatile u32 g_scan_mb;           /* memory read so far by the running scan */
 
 typedef struct { u64 addr, size; u32 type, attr, perm, ipc_refcount, device_refcount, padding; } MemoryInfo;
 
