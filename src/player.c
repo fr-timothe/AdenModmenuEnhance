@@ -543,6 +543,56 @@ int aden_storage_free(void){
     return n;
 }
 
+/* ---- Stack 99 off: split oversized stacks ----
+   With Stack 99 off the game shows a stack above the normal max as 1 (the count is kept: turning
+   it on again shows it). Before turning it off, every stack above maxof(id) in the pockets and the
+   home storage is cut to the normal max and the rest is placed as normal stacks in free pocket
+   slots, then free storage slots. Items on the ground or in houses are not covered.
+   Returns the stacks split, -1 player data not ready, -2 pockets or storage look wrong,
+   -3 not enough free slots (*need and *have set, nothing written). */
+static uptr pslot(int c,int i){ return i<20 ? s_copy[c]+i*8 : s_copy[c]-0xB8+(i-20)*8; }
+static int over(uptr s,int (*maxof)(u16),int* m){
+    u16 id=*(u16*)s; if(id>=0xFFFE) return 0;
+    *m=maxof(id); if(*m<=1 || *(u16*)(s+6)) return 0;   /* not stackable, or +6 holds something else */
+    return *(u16*)(s+4)+1-*m;                           /* count-1 at +4 */
+}
+int aden_split_stacks(int (*maxof)(u16), int* need, int* have){
+    *need=*have=0;
+    if(!aden_player_ready()) return -1;
+    int cap=chest_cap(); if(cap<0) return cap;
+    u32 size=pocket_size(s_copy[0]);
+    for(int c=1;c<s_ncopies;c++){ u32 z=pocket_size(s_copy[c]); if(z<size) size=z; }
+    if(size>40) size=40;
+    for(int c=0;c<s_ncopies;c++) for(u32 i=20;i<size;i++) if(!slot_ok((u8*)pslot(c,i))) return -2;
+    int m, x;
+    for(u32 i=0;i<size;i++){
+        if((x=over(pslot(0,i),maxof,&m))>0) *need+=(x+m-1)/m;
+        int c=0; while(c<s_ncopies && *(u16*)pslot(c,i)==0xFFFE) c++; if(c==s_ncopies) (*have)++;
+    }
+    for(int i=0;i<cap;i++){
+        if((x=over(s_pb[0]+PERS_CHEST+i*8,maxof,&m))>0) *need+=(x+m-1)/m;
+        if(chest_free(i)) (*have)++;
+    }
+    if(*need>*have){ aden_log("stack split: need %d free slots, have %d", *need, *have); return -3; }
+    int n=0;
+    for(int pass=0;pass<2;pass++){
+        int cnt= pass ? cap : (int)size;
+        for(int i=0;i<cnt;i++){
+            uptr s0= pass ? s_pb[0]+PERS_CHEST+i*8 : pslot(0,i);
+            if((x=over(s0,maxof,&m))<=0) continue;
+            u16 id=*(u16*)s0;
+            int nc= pass ? s_npb : s_ncopies;
+            for(int c=0;c<nc;c++){ uptr s= pass ? s_pb[c]+PERS_CHEST+i*8 : pslot(c,i);
+                if(*(u16*)s==id) *(u16*)(s+4)=(u16)(m-1); }
+            int put=aden_pocket_add(id,x,m); if(put<0) put=0;
+            if(put<x){ int r=aden_storage_add(id,x-put,m); if(r>0) put+=r; }
+            aden_log("stack split %04X: %d over max %d, %d placed", id, x, m, put);
+            n++;
+        }
+    }
+    return n;
+}
+
 /* ---- turnips ---- */
 /* MAIN_KABU: u32 buy price, then 14 sell prices (Sunday AM/PM, which the game keeps at 0, then Monday AM .. Saturday PM) */
 #define KABU_MON 3

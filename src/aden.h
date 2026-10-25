@@ -8,7 +8,7 @@ typedef u64 uptr; typedef u64 size_t; typedef u32 Handle; typedef u32 Result;
 #define ALIGN_UP(x,a) ALIGN_DOWN((x)+(a)-1,(a))
 #define PAGE 0x1000UL
 #define CUR_PROCESS_HANDLE 0xFFFF8001
-#define ADEN_VERSION "0.6.0-beta.7"   /* release version: start-up log and About tab */
+#define ADEN_VERSION "0.6.0-beta.8"   /* release version: start-up log and About tab */
 
 typedef struct { u64 addr, size; u32 type, attr, perm, ipc_refcount, device_refcount, padding; } MemoryInfo;
 
