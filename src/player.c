@@ -187,6 +187,7 @@ static void scan_players(int dev, int* empty){
         a=end;
     }
 }
+static uptr s_pb[MAXF]; static int s_npb;          /* personal save bases */
 volatile int g_step[NSTEPS]; volatile u32 g_step_n[NSTEPS]; volatile u32 g_scan_mb;
 static void step(int i,int st,u32 n){ g_step_n[i]=n; __atomic_store_n(&g_step[i],st,__ATOMIC_RELEASE); }
 static void find_thread(void* arg){
@@ -253,7 +254,6 @@ void aden_player_find(void){
 /* re-check cached copies (memory can move after loading screens). One bad copy means the
    others may be old save buffers too: stop writing at once and, if it lasts (not just a
    write caught half-way), drop everything derived from the copies and search again. */
-static uptr s_pb[MAXF]; static int s_npb;          /* personal save bases */
 static uptr s_mb[4]; static int s_nmb;             /* island (main) save bases */
 #define STALE_CHECKS 8
 static int range_rw(uptr a, uptr len);
