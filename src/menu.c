@@ -101,8 +101,7 @@ static void flush(float x,float y){
         for(int r=0;r<MAXROWS;r++) if(k->len[r]) last=r;
         for(int r=0;r<=last;r++){
             int m=k->len[r]; if(n+m+2>(int)sizeof buf) break;
-            memcpy(buf+n,k->row[r],m); n+=m; buf[n++]='
-';
+            memcpy(buf+n,k->row[r],m); n+=m; buf[n++]='\n';
         }
         buf[n]=0;
         if(n) gfx_text(x,y,1.0f,k->color,buf);
