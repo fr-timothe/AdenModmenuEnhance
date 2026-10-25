@@ -92,6 +92,34 @@ void gfx_rrect(float x,float y,float w,float h,float r,u32 rgba){
     gfx_disk(x+r,y-h+r,r,rgba); gfx_disk(x+w-r,y-h+r,r,rgba);
 }
 
+/* ---- item icons: nvnCommandBufferDrawTexture on the same command buffer as the primitives ----
+   Its region is in render-target pixels, so the menu space (1280x720, origin centre, y up) is
+   scaled to the target size read from the viewport. Which way the window origin and the source
+   units go is not known yet: mode bit 0 = upper-left origin, bit 1 = source in texels (128). */
+static float s_tw=1280, s_th=720; static int s_vp_done;
+static void target_size(void){
+    if(s_vp_done) return; s_vp_done=1;
+    const float* v=*(const float**)(cur_info+0x40);
+    if(!v){ aden_log("icons: no viewport, using 1280x720"); return; }
+    aden_log("icons: viewport %p: %d %d %d %d %d %d", v, (int)v[0],(int)v[1],(int)v[2],(int)v[3],(int)v[4],(int)v[5]);
+    for(int i=0;i<5;i++){ float w=v[i]-(i>=2?v[i-2]:0), h=v[i+1]-(i>=2?v[i-1]:0);
+        if(w>=640 && w<=4096 && h>=360 && h<=2304 && w>h){ s_tw=w; s_th=h; break; } }
+    aden_log("icons: target %dx%d", (int)s_tw, (int)s_th);
+}
+void gfx_texture(u64 handle,float x,float y,float w,float h,int mode){
+    if(!cur_ok || !handle) return;
+    target_size();
+    void (*draw)(void*,u64,const float*,const float*)=*(void**)(g_main_base+0x4b62bb8);
+    if(!draw) return;
+    float sx=s_tw/1280.f, sy=s_th/720.f, px=(x+640)*sx;
+    float d[4], top=(mode&1) ? (360-y)*sy : (y+360)*sy, bot=(mode&1) ? top+h*sy : top-h*sy;
+    d[0]=px; d[2]=px+w*sx; d[1]= top<bot ? top : bot; d[3]= top<bot ? bot : top;
+    float u=(mode&2) ? 128.f : 1.f, s[4]={0,0,u,u};
+    void* cmd=*(void**)(prim_ctx()+0xb8);
+    draw(cmd,handle,d,s);
+}
+
+volatile u32 g_render_frame;   /* frames drawn: the icon loader steps once per frame */
 static void (*o_dbgdraw)(void*, uptr);
 /* The game records its render layers on several threads at once, so only the
    thread drawing our chosen layer may touch the shared drawing state. */
@@ -99,6 +127,7 @@ static void h_dbgdraw(void* self, uptr info){
     o_dbgdraw(self,info);
     u32 layer=*(u32*)(info+0x28);
     if((int)layer!=g_draw_layer) return;
+    g_render_frame++;
     cur_info=info; cur_ok=1; s_prints=0;
     aden_menu_draw();
     cur_ok=0;

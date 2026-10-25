@@ -5,7 +5,9 @@ volatile int g_input_hold;   /* set at close: keep hiding input until the menu s
 static volatile u64 s_btn; static volatile s32 s_ly, s_lx;
 typedef int (*GetFn)(NpadState*, int, const u32*);
 #define HOOK(name) static GetFn o_##name; static int h_##name(NpadState* st,int c,const u32* id){ int r=o_##name(st,c,id); return filt(st,r); }
+void aden_icons_tick(void);
 static int filt(NpadState* st, int r){
+    aden_icons_tick();   /* icon loading runs on the thread that reads the controllers, once per frame */
     if(r>0){
         __atomic_or_fetch(&s_btn, st[0].buttons, __ATOMIC_RELAXED);
         if(st[0].ly>8000||st[0].ly<-8000) s_ly=st[0].ly;

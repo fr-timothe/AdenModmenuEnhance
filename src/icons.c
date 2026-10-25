@@ -1,0 +1,185 @@
+#include "nn.h"
+/* Item icons for the Items grid (ACNH 3.0.3 only; research notes kept outside the repo).
+   The game loads each icon as its own archive through "icon slots" (0x1a8 bytes): request with an
+   item and an icon kind, step the slot once per frame until the archive is loaded, then read its
+   agl::TextureData. We own ICON_N slots and drive them from the controller hook (main thread);
+   the render hook only draws ready icons with nvnCommandBufferDrawTexture.
+   Lazy: only the tiles on screen are requested (at most REQ_PER_TICK new ones per frame), and
+   icons that left the screen are released when their slot is needed again.
+   Every game address is checked against the 3.0.3 code before anything runs; on any mismatch,
+   or after a session that crashed while drawing icons, the grid keeps its coloured disks. */
+#define ICON_N        40
+#define SLOT_SIZE     0x1a8
+#define REQ_PER_TICK  4
+#define LOAD_TIMEOUT  600      /* ticks (frames) before a load counts as failed */
+#define KEEP_TICKS    8        /* an icon off screen this long may be released (GPU frames in flight) */
+#define TRY_FILE  "adensd:/aden/icons_trying"   /* exists while the first draws of a session run */
+#define OFF_FILE  "adensd:/aden/icons_off"      /* icons turned off (by the user or after a crash) */
+#define MODE_FILE "adensd:/aden/icon_mode"      /* draw variant 0-3 picked in the About tab */
+
+/* main+offset in 3.0.3 */
+enum { A_REQ=0x3312d40, A_CTOR=0x3363544, A_STEP=0x3363948, A_FINISH=0x717520, A_GETTEX=0x3363bdc,
+       A_TDREL=0x37fd0e0, A_SMP_CTOR=0x380cee0, A_SMP_UPD=0x380d37c,
+       D_DRAWTEX=0x4b62bb8, D_GETHANDLE=0x4b61cf0, D_GFX=0x59e77d8, D_EMPTYSTR=0x4b4b980, D_STR64_VT=0x4ab2bc0 };
+static const struct { u32 off, w0, w1; } CHECK[]={
+    {A_REQ,0xd106c3ff,0xa9157bfd},{A_CTOR,0xd10143ff,0xa9017bfd},{A_STEP,0xa9be7bfd,0xa9014ff4},
+    {A_FINISH,0xa9bc7bfd,0xf9000bf7},{A_GETTEX,0xa9be7bfd,0xa9014ff4},{A_TDREL,0xb9400008,0x3100051f},
+    {A_SMP_CTOR,0xa9bc7bfd,0xf9000bf7},{A_SMP_UPD,0xd101c3ff,0xa9037bfd} };
+#define AT(o) (g_main_base+(o))
+
+typedef struct { volatile u32 key; volatile int st; volatile u64 handle; u32 seen, ticks; u8 td[0xa0] __attribute__((aligned(16))); } Icon;
+enum { I_FREE, I_LOAD, I_READY, I_FAIL };
+static Icon s_ic[ICON_N];
+static u8 s_slot[ICON_N][SLOT_SIZE] __attribute__((aligned(16)));
+static u8 s_sampler[0x100] __attribute__((aligned(16)));
+static int s_state;            /* 0 not started, 1 running, -1 this game version is not supported */
+static int s_off=-1;           /* user switch (OFF_FILE); -1 not read yet */
+static int s_reqlog;
+static int s_sampler_id; static u32 s_tick;
+static volatile u32 s_want[ICON_N]; static volatile int s_nwant; static volatile u32 s_want_frame;
+extern volatile u32 g_render_frame;
+static u32 s_last_frame;
+static int s_mode=-1;
+static int s_logged;           /* first few icons are logged step by step */
+
+static int file_exists(const char* p){ FsFile f; if(nn_fs_OpenFile(&f,p,FS_READ)) return 0; nn_fs_CloseFile(f); return 1; }
+static u64 tls(void){ u64 v; __asm__ volatile("mrs %0, tpidrro_el0":"=r"(v)); return v; }
+
+/* the icon kind the game uses for an item: furniture art, clothing, recipe card, or the pocket icon */
+static u32 kind_of(u16 id,char fam){ return id==0x16A2 ? 11 : fam=='F' ? 1 : fam=='C' ? 10 : 0; }
+
+/* the user switch, read once: a session that stopped during its first icon draws turns icons off */
+static int icons_off(void){
+    if(s_off<0 && aden_sd_ready()){
+        if(file_exists(TRY_FILE)){
+            nn_fs_DeleteFile(TRY_FILE); nn_fs_CreateFile(OFF_FILE,0);
+            aden_log("icons: the last session stopped while drawing icons - icons turned off (About tab turns them on)");
+        }
+        s_off=file_exists(OFF_FILE);
+        if(s_off) aden_log("icons: off (sdmc/aden/icons_off)");
+    }
+    return s_off!=0;
+}
+static int start(void){
+    for(unsigned i=0;i<sizeof CHECK/sizeof CHECK[0];i++){
+        const u32* w=(const u32*)AT(CHECK[i].off);
+        if(w[0]!=CHECK[i].w0 || w[1]!=CHECK[i].w1){ aden_log("icons: game code differs at main+%x - icons off (3.0.3 only)", CHECK[i].off); return -1; }
+    }
+    if(!*(u64*)AT(D_DRAWTEX) || !*(u64*)AT(D_GETHANDLE) || !*(u64*)AT(D_GFX)){ aden_log("icons: graphics functions not loaded - icons off"); return -1; }
+    /* one sampler for every icon */
+    ((void(*)(void*))AT(A_SMP_CTOR))(s_sampler);
+    ((void(*)(void*,int))AT(A_SMP_UPD))(s_sampler,0x3e);
+    s_sampler_id=*(s16*)(s_sampler+0xda);
+    for(int i=0;i<ICON_N;i++){
+        u8* s=s_slot[i]; memset(s,0,SLOT_SIZE);
+        ((void(*)(void*,void*))AT(A_CTOR))(s,0);
+        /* +0x148 FixedSafeString<64>, set up by the slot's owner (as the game's UI scenes do) */
+        *(u64*)(s+0x148)=*(u64*)AT(D_STR64_VT)+0x10; *(u64*)(s+0x150)=(u64)(s+0x15c); *(u32*)(s+0x158)=0x40; s[0x15c]=0;
+        *(u32*)(s+0x1a0)=0;
+        s_ic[i].st=I_FREE; s_ic[i].key=0;
+    }
+    aden_log("icons: ready, %d slots, sampler %d, main thread %lx", ICON_N, s_sampler_id, tls());
+    return 1;
+}
+static int slot_idle(int i){ u8* s=s_slot[i]; return *(u32*)(s+0x1a0)==0 && !(s[0x18]&2); }
+/* mirror of the game's slot release: the archive is unloaded two steps later */
+static void slot_release(int i){
+    u8* s=s_slot[i];
+    if(s_ic[i].st==I_READY) ((void(*)(void*))AT(A_TDREL))(s_ic[i].td+0x50);
+    **(char**)(s+0x60)=0; s[0xf0]=0;
+    if(*(int*)(s+0x100)!=1 && (s[0x18]&2) && *(int*)(s+0x140)==-1) *(int*)(s+0x140)=1;
+    *(u32*)(s+0x1a0)=0;
+    s_ic[i].st=I_FREE; s_ic[i].key=0; s_ic[i].handle=0;
+}
+static void request(int i,u32 key){
+    u8* s=s_slot[i]; u32 item[2]={key&0xFFFF,0};
+    s_ic[i].key=key; s_ic[i].ticks=0; s_ic[i].seen=s_tick;
+    ((void(*)(void*,void*,const void*,u32))AT(A_REQ))(s,(void*)AT(D_EMPTYSTR),item,key>>16);
+    s_ic[i].st=I_LOAD;
+    if(s_reqlog++<4) aden_log("icons: request %04X kind %u in slot %d", key&0xFFFF, key>>16, i);
+}
+static void ready(int i){
+    u8* s=s_slot[i]; u8* td=s_ic[i].td;
+    memset(td,0,sizeof s_ic[i].td); *(int*)(td+0x50)=-1; *(const char**)(td+0x90)="agl::TextureData"; *(u32*)(td+0x98)=0x10000;
+    if(!((u8(*)(void*,void*,void*))AT(A_GETTEX))(s,s+0x148,td) || *(int*)(td+0x50)<0){
+        s_ic[i].st=I_FAIL; aden_log("icons: %04X loaded but has no texture", s_ic[i].key&0xFFFF); return; }
+    void* dev=*(void**)(*(u64*)AT(D_GFX)+0x30);
+    u64 h=((u64(*)(void*,int,int))*(u64*)AT(D_GETHANDLE))(dev,*(int*)(td+0x50),s_sampler_id);
+    s_ic[i].handle=h; __atomic_store_n(&s_ic[i].st,I_READY,__ATOMIC_RELEASE);
+    if(s_logged<4){ s_logged++; aden_log("icons: %04X ready after %u frames: %ux%u, texture %d, handle %lx",
+        s_ic[i].key&0xFFFF, s_ic[i].ticks, *(u16*)(td+0x30), *(u16*)(td+0x32), *(int*)(td+0x50), h); }
+}
+/* controller hook, once per rendered frame */
+HIDDEN void aden_icons_tick(void){
+    u32 f=g_render_frame; if(f==s_last_frame || s_state<0) return; s_last_frame=f;
+    int nw= f-s_want_frame<30 && !icons_off() ? s_nwant : 0;   /* the menu stopped asking: nothing is on screen */
+    if(!s_state){ if(!nw) return; int r=start(); if(!r) return; s_state=r; if(r<0) return; }
+    s_tick++;
+    for(int i=0;i<ICON_N;i++){
+        if(s_ic[i].st==I_FREE && slot_idle(i)) continue;
+        u8* s=s_slot[i];
+        ((void(*)(void*))AT(A_STEP))(s);
+        if(s_ic[i].st==I_LOAD){
+            s_ic[i].ticks++;
+            if(*(u32*)(s+0x1a0)==1 && (s[0x18]&2) && *(int*)(s+0x100)!=1 && ((u8(*)(void*))AT(A_FINISH))(s)){ *(u32*)(s+0x1a0)=2; ready(i); }
+            else if(s_ic[i].ticks>LOAD_TIMEOUT){ s_ic[i].st=I_FAIL; aden_log("icons: %04X kind %u did not load", s_ic[i].key&0xFFFF, s_ic[i].key>>16); }
+        }
+        /* a failed load that completes late still holds its archive: let it go */
+        if(s_ic[i].st==I_FAIL && *(u32*)(s+0x1a0)==1 && (s[0x18]&2) && *(int*)(s+0x100)!=1 && ((u8(*)(void*))AT(A_FINISH))(s)) *(u32*)(s+0x1a0)=2;
+    }
+    int asked=0;
+    for(int w=0;w<nw;w++){
+        u32 key=s_want[w]; if(!key) continue;
+        int at=-1; for(int i=0;i<ICON_N;i++) if(s_ic[i].key==key && s_ic[i].st!=I_FREE){ at=i; break; }
+        if(at>=0){ s_ic[at].seen=s_tick; continue; }
+        if(asked>=REQ_PER_TICK) continue;
+        /* a free slot, else the icon unseen the longest (never one still loading) */
+        int pick=-1; u32 old=0;
+        for(int i=0;i<ICON_N && pick<0;i++) if(s_ic[i].st==I_FREE && slot_idle(i)) pick=i;
+        if(pick<0) for(int i=0;i<ICON_N;i++){
+            if(s_ic[i].st==I_LOAD || s_ic[i].st==I_FREE) continue;
+            u32 age=s_tick-s_ic[i].seen;
+            if(age>=KEEP_TICKS && age>old){ old=age; pick=i; }
+        }
+        if(pick<0) break;
+        if(s_ic[pick].st!=I_FREE){ slot_release(pick); continue; }   /* reusable a few frames later */
+        request(pick,key); asked++;
+    }
+}
+
+/* ---- render side ---- */
+HIDDEN void aden_icons_want(int n,const u16* ids,const char* fams){
+    if(n>ICON_N) n=ICON_N;
+    for(int i=0;i<n;i++) s_want[i]=ids[i]|kind_of(ids[i],fams[i])<<16;
+    s_nwant=n; s_want_frame=g_render_frame;
+}
+HIDDEN int aden_icons_on(void){ return s_state>=0 && !icons_off(); }
+HIDDEN int aden_icon_mode(void){
+    if(s_mode<0){ s_mode=0; FsFile f; if(aden_sd_ready() && !nn_fs_OpenFile(&f,MODE_FILE,FS_READ)){ char c=0; nn_fs_ReadFile(f,0,&c,1); nn_fs_CloseFile(f); if(c>='0'&&c<='3') s_mode=c-'0'; } }
+    return s_mode;
+}
+HIDDEN void aden_icon_mode_set(int m){
+    s_mode=m&3; char c='0'+s_mode; FsFile f;
+    nn_fs_DeleteFile(MODE_FILE); nn_fs_CreateFile(MODE_FILE,1);
+    if(!nn_fs_OpenFile(&f,MODE_FILE,FS_WRITE)){ FsWriteOption o={1}; nn_fs_WriteFile(f,0,&c,1,&o); nn_fs_CloseFile(f); }
+    aden_log("icons: draw variant %d", s_mode);
+}
+/* icons back on after the user asks (About tab) */
+HIDDEN void aden_icons_enable(void){ nn_fs_DeleteFile(OFF_FILE); nn_fs_DeleteFile(TRY_FILE); s_off=0; aden_log("icons: turned on"); }
+HIDDEN void aden_icons_disable(void){ nn_fs_CreateFile(OFF_FILE,0); s_off=1; aden_log("icons: turned off"); }
+void gfx_texture(u64 handle,float x,float y,float w,float h,int mode);   /* gfx.c */
+/* draws the icon of id/fam in the box (menu space, top-left corner, y up); 0 if it is not ready */
+static u32 s_draws; static int s_trying;
+HIDDEN int aden_icon_draw(u16 id,char fam,float x,float y,float w,float h,int mode){
+    if(s_state<=0 || s_off) return 0;
+    u32 key=id|kind_of(id,fam)<<16;
+    for(int i=0;i<ICON_N;i++) if(s_ic[i].key==key && __atomic_load_n(&s_ic[i].st,__ATOMIC_ACQUIRE)==I_READY){
+        /* the first draws of a session are guarded: a crash leaves the marker and turns icons off */
+        if(!s_draws){ nn_fs_CreateFile(TRY_FILE,0); s_trying=1; aden_log("icons: first draw (variant %d)", mode); aden_log_flush(); }
+        gfx_texture(s_ic[i].handle,x,y,w,h,mode);
+        if(s_trying && ++s_draws>300){ nn_fs_DeleteFile(TRY_FILE); s_trying=0; aden_log("icons: 300 draws done, no crash"); }
+        else if(!s_trying) s_draws++;
+        return 1;
+    }
+    return 0;
+}
