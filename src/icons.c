@@ -21,7 +21,7 @@
 enum { A_REQ=0x3312d40, A_CTOR=0x3363544, A_STEP=0x3363948, A_FINISH=0x717520, A_GETTEX=0x3363bdc,
        A_TDREL=0x37fd0e0, A_SMP_CTOR=0x380cee0, A_SMP_UPD=0x380d37c,
        D_DRAWTEX=0x4b62bb8, D_GETHANDLE=0x4b61cf0, D_GFX=0x59e77d8, D_EMPTYSTR=0x4b4b980, D_STR64_VT=0x4ab2bc0,
-       D_HEAPMGR=0x4ab2698 };
+       };
 static const struct { u32 off, w0, w1; } CHECK[]={
     {A_REQ,0xd106c3ff,0xa9157bfd},{A_CTOR,0xd10143ff,0xa9017bfd},{A_STEP,0xa9be7bfd,0xa9014ff4},
     {A_FINISH,0xa9bc7bfd,0xf9000bf7},{A_GETTEX,0xa9be7bfd,0xa9014ff4},{A_TDREL,0xb9400008,0x3100051f},
@@ -44,6 +44,25 @@ static u32 s_draws; static int s_trying;
 static int s_mode=-1;
 static int s_logged;           /* first few icons are logged step by step */
 
+/* A tiny sead::Heap of our own for the slots' state tables: the constructor only calls
+   tryAlloc (vtable +0x30). Bump allocation from a static pool, never freed (the slots live
+   for the whole session). Any other heap call is logged and fails. */
+#define POOL_SIZE 0x4000
+static u8 s_pool[POOL_SIZE] __attribute__((aligned(16))); static u32 s_pool_used;
+static void* heap_alloc(void* self,u64 size,int align){
+    (void)self; if(align<8) align=8;
+    u32 at=(s_pool_used+align-1)&~(u32)(align-1);
+    if(at+size>POOL_SIZE){ aden_log("icons: heap pool full (%lu bytes asked)", size); return 0; }
+    s_pool_used=at+(u32)size; return s_pool+at;
+}
+static u64 heap_other(void){ aden_log("icons: unexpected heap call"); return 0; }
+static void* s_heap_vt[32]; static void* s_heap[0x40];
+static void* own_heap(void){
+    for(int i=0;i<32;i++) s_heap_vt[i]=(void*)heap_other;
+    s_heap_vt[6]=(void*)heap_alloc;
+    s_heap[0]=s_heap_vt;
+    return s_heap;
+}
 static int file_exists(const char* p){ FsFile f; if(nn_fs_OpenFile(&f,p,FS_READ)) return 0; nn_fs_CloseFile(f); return 1; }
 static u64 tls(void){ u64 v; __asm__ volatile("mrs %0, tpidrro_el0":"=r"(v)); return v; }
 /* each first call into the game is logged and written to the SD card before it runs,
@@ -84,22 +103,21 @@ static int start(void){
     ((void(*)(void*,int))AT(A_SMP_UPD))(s_sampler,0x3e);
     /* a slot allocates its state table from the heap it is given, else from the calling thread's
        current sead heap. The controller thread has none (beta.11 stopped in the first constructor,
-       which then writes through a null table), and scene heaps die on scene changes anyway:
-       give every slot the root heap (sead::HeapMgr, GOT main+0x4ab2698, root heap at +8). */
-    u64 mgr=**(u64**)AT(D_HEAPMGR), heap= mgr ? *(u64*)(mgr+8) : 0;
-    aden_log("icons: root heap %lx", heap);
-    if(!heap){ aden_log("icons: no root heap - icons off"); return -1; }
+       which then writes through a null table), the root heap read as 0 (beta.12), and scene heaps
+       die on scene changes: give the slots a heap of our own. */
+    void* heap=own_heap();
     stage(3,"slots: constructor");
     s_sampler_id=*(s16*)(s_sampler+0xda);
     for(int i=0;i<ICON_N;i++){
         u8* s=s_slot[i]; memset(s,0,SLOT_SIZE);
-        ((void(*)(void*,void*))AT(A_CTOR))(s,(void*)heap);
+        ((void(*)(void*,void*))AT(A_CTOR))(s,heap);
         if(!*(u64*)(s+0x128)){ aden_log("icons: slot %d got no state table - icons off", i); return -1; }
         /* +0x148 FixedSafeString<64>, set up by the slot's owner (as the game's UI scenes do) */
         *(u64*)(s+0x148)=*(u64*)AT(D_STR64_VT)+0x10; *(u64*)(s+0x150)=(u64)(s+0x15c); *(u32*)(s+0x158)=0x40; s[0x15c]=0;
         *(u32*)(s+0x1a0)=0;
         s_ic[i].st=I_FREE; s_ic[i].key=0;
     }
+    aden_log("icons: %u bytes of our heap used", s_pool_used);
     aden_log("icons: ready, %d slots, sampler %d, main thread %lx", ICON_N, s_sampler_id, tls());
     return 1;
 }
