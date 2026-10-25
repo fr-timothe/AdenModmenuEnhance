@@ -21,7 +21,8 @@ static uptr s_copy[MAXCOPIES]; static int s_ncopies;
    that buffer back from the GPU every frame for the rest of the session. */
 #define MI_PLAIN(mi) (((mi).attr&5)==0)
 /* second pass, only when the first finds nothing: DeviceShared heap that is not Locked.
-   On Eden 3.0.3 the save data sits there (beta.3 log: 505 MB skipped, no player found).
+   Where the game puts its save buffers changes between boots: on Eden 3.0.3 they are sometimes
+   all DeviceShared (beta.4 log: 568 MB skipped, only empty resident slots in plain memory, no player).
    Regions smaller than a personal save cannot hold one. */
 #define MI_DEV(mi)   (((mi).attr&5)==4)
 static int scan_ok(const MemoryInfo* mi, int dev){
@@ -164,13 +165,8 @@ static void scan_players(int dev, int* empty){
         if(!dev && (mi.perm&3)==3 && mi.type==5 && !MI_PLAIN(mi)){ s_skip_n[mi.attr&7]++; s_skip_mb[mi.attr&7]+=mi.size; }
         if(scan_ok(&mi,dev)){
             for(uptr P=mi.addr+0x20; P+0xC0<end; P+=8){
-<<<<<<< ours
-                if(!(P&(SCAN_CHUNK-1)) && (!scan_nap(P,&end) || P+0xC0>=end)) break;
-                if(*(u32*)(P-4)!=0xFFFFFFFF || !count2_ok(*(u32*)(P-0x18))) continue;
-=======
                 if(!(P&(SCAN_CHUNK-1)) && (!scan_nap(P,&end,dev) || P+0xC0>=end)) break;
-                if(*(u32*)(P-4)!=0xFFFFFFFF || *(u32*)(P-0x18)!=0) continue;
->>>>>>> theirs
+                if(*(u32*)(P-4)!=0xFFFFFFFF || !count2_ok(*(u32*)(P-0x18))) continue;
                 if(!sig_ok(P)) continue;
                 if(base_ok(P)){
                     u32 pid=*(u32*)(P-PERS_P+PERS_ID_PID);
