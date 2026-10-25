@@ -39,6 +39,13 @@ MOD MANAGER
   than the normal max in your pockets and home storage (it needs enough free slots, or it stays
   on). Stacks on the ground or in houses are not split. Don't use it with the Stack99 romfs mod.
 
+ITEM ICONS (test, game 3.0.3)
+- The Items grid shows the game's own item icons, loaded only for the page on screen.
+- About tab: the shovel is drawn four ways. Pick with Left/Right the box where it looks right;
+  that variant is used in the grid. A turns icons on/off.
+- If the game stops while icons are first drawn, icons turn themselves off at the next start.
+  Send sdmc/aden/log.txt with a report.
+
 NOTES
 - Back up your save before big edits (Eden: right-click game > Open Save Data Location).
 - Log file: %APPDATA%\eden\sdmc\aden\log.txt

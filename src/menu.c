@@ -209,6 +209,10 @@ static int s_was_open, s_armed;
 #define GPAGE (GCOLS*GROWS)
 #define GLINE 11                   /* label characters per line (tile width / 8) */
 static int s_grid_on, s_grid_n, s_grid_sel, s_grid_fam[GPAGE];
+static u16 s_grid_id[GPAGE]; static char s_grid_fc[GPAGE];
+void aden_icons_want(int n,const u16* ids,const char* fams); int aden_icon_draw(u16 id,char fam,float x,float y,float w,float h,int mode);
+int aden_icons_on(void); int aden_icon_mode(void); void aden_icon_mode_set(int); void aden_icons_enable(void); void aden_icons_disable(void);
+static int s_icon_test;   /* About tab: draw the four icon variants */
 static char s_glab[GCOLS][GROWS*(2*GLINE+8)+1];
 static char s_famtxt[24];
 /* copy at most GLINE characters, ending with '.' when the text is cut */
@@ -345,7 +349,8 @@ static void tab_items(void){
     int top=(*cur/GPAGE)*GPAGE, pages=(s_nmatch+GPAGE-1)/GPAGE;
     s_grid_on=1; s_grid_sel=*cur-top; s_grid_n=0;
     char la[GPAGE][GLINE+1], lb[GPAGE][GLINE+1];
-    for(int i=0;i<GPAGE && top+i<s_nmatch;i++){ Item* it=&s_items[s_match[top+i]]; s_grid_fam[i]=fam_idx(it->fam); wrap2(it->name,la[i],lb[i]); s_grid_n++; }
+    for(int i=0;i<GPAGE && top+i<s_nmatch;i++){ Item* it=&s_items[s_match[top+i]]; s_grid_fam[i]=fam_idx(it->fam); s_grid_id[i]=it->id; s_grid_fc[i]=it->fam; wrap2(it->name,la[i],lb[i]); s_grid_n++; }
+    aden_icons_want(s_grid_n,s_grid_id,s_grid_fc);   /* only the tiles on this page are loaded */
     for(int c=0;c<GCOLS;c++){
         char* o=s_glab[c]; int n=0, cap=(int)sizeof s_glab[c];
         for(int r=0;r<GROWS;r++){ int i=r*GCOLS+c;
@@ -543,6 +548,20 @@ static void tab_about(void){
     text(ROW0,C_TEXT,"Aden Modmenu v" ADEN_VERSION " for ACNH 3.0.2 / 3.0.3");
     text(ROW0+2,C_DIM,"Open from the Nook Phone. B closes.");
     text(ROW0+3,C_DIM,"Your character is paused while it is open.");
+    /* item icon test: the shovel drawn four ways; the right one is used by the Items grid */
+    static const u16 shovel=0x0833; static const char fam='M';
+    int on=aden_icons_on(), m=aden_icon_mode();
+    put(ROW0+5,0,C_TEXT,"Item icons (test): %s",on?"ON":"off");
+    text(ROW0+6,C_DIM,on?"A turns icons off. Left/Right picks the variant.":"A turns icons on.");
+    if(on){
+        aden_icons_want(1,&shovel,&fam); s_icon_test=1;
+        text(ROW0+7,C_DIM,"Pick the box where the shovel looks right.");
+        put(ROW0+15,0,C_TEXT,"     1             2             3             4");
+        put(ROW0+16,0,C_DIM,"Variant %d is used in the Items grid.",m+1);
+        if(pr(B_LEFT|S_LEFT)) aden_icon_mode_set((m+3)&3);
+        if(pr(B_RIGHT|S_RIGHT)) aden_icon_mode_set((m+1)&3);
+    }
+    if(pr(B_A)){ if(on) aden_icons_disable(); else aden_icons_enable(); }
 }
 
 /* panel geometry (720p units, origin centre, y up) */
@@ -568,12 +587,21 @@ static void draw_grid(void){
         float x=PX0+GX0+(i%GCOLS)*GPITCH, y=PY0-GY0-(i/GCOLS)*GPITCH;
         if(i==s_grid_sel) gfx_rrect(x-5,y+5,GTILE+10,GTILE+10,22,C_PILL);
         gfx_rect(x,y,GTILE,GTILE,C_TILE);
-        gfx_disk(x+GTILE*0.5f,y-27,15,FAMCOL[s_grid_fam[i]]);  /* family colour, until real item icons */
+        /* the item's icon once it is loaded, its family colour until then */
+        if(!aden_icon_draw(s_grid_id[i],s_grid_fc[i],x+22,y-2,46,46,aden_icon_mode())) gfx_disk(x+GTILE*0.5f,y-27,15,FAMCOL[s_grid_fam[i]]);
     }
 }
 static void draw_grid_text(void){
     for(int c=0;c<GCOLS;c++) gfx_text(PX0+GX0+c*GPITCH+1,PY0-GY0-50,1.0f,C_TEXT,s_glab[c]);
     gfx_text(PX0+466-strlen(s_famtxt)*4.f,PY0-118,1.0f,0xFFFFFFFF,s_famtxt);
+}
+static void draw_icon_test(void){
+    for(int k=0;k<4;k++){
+        float x=PX0+40+k*112, y=36;
+        if(k==aden_icon_mode()) gfx_rrect(x-6,y+6,84,84,20,C_PILL);
+        gfx_rect(x,y,72,72,C_TILE);
+        aden_icon_draw(0x0833,'M',x+8,y-8,56,56,k);
+    }
 }
 static void draw_chrome(void){
     gfx_prim_begin();
@@ -587,6 +615,7 @@ static void draw_chrome(void){
         pos+=strlen(TABNAME[i])+5;
     }
     if(s_grid_on) draw_grid();
+    if(s_icon_test) draw_icon_test();
     for(int i=0;i<s_nicons;i++) draw_icon(TX+9,CY-s_icons[i].row*20-8,s_icons[i].st);
     if(s_hl_row>=0){
         if(s_hl_key>=0) gfx_rrect(TX+s_hl_key*24-2,CY-s_hl_row*20+3,28,22,11,C_PILL);
@@ -618,7 +647,7 @@ void aden_menu_draw(void){
         if(pr(B_L)) s_tab=(s_tab+NTABS-1)%NTABS;
         if(pr(B_R)) s_tab=(s_tab+1)%NTABS;
     }
-    s_hl_row=-1; s_hl_key=-1; s_grid_on=0; s_nicons=0; s_frame++;
+    s_hl_row=-1; s_hl_key=-1; s_grid_on=0; s_nicons=0; s_frame++; s_icon_test=0;
     switch(s_tab){
         case TAB_ITEMS:  tab_items(); break;
         case TAB_PLAYER: tab_player(); break;
