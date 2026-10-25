@@ -229,10 +229,83 @@ static void wrap2(const char* s,char* a,char* b){
     if(m>GLINE) b[GLINE-1]='.';
     b[k]=0;
 }
+
+/* ---------- loading page: every place a search looks, one row each ----------
+   Shown instead of the tab while the player (or island) search runs or after it failed,
+   and for a moment after it succeeds so the green checks can be read. */
+#define C_OK 0x5FB55AFF
+typedef struct { u8 row, st; } Icon;
+static Icon s_icons[NSTEPS]; static int s_nicons; static u32 s_frame;
+static int s_seen_search; static u64 s_done_at;
+#define HOLD_TICKS (19200000ull*6/5)   /* 1.2 s at 19.2 MHz */
+static const char* const STEPNAME[NSTEPS]={"Game memory","Graphics memory","Nook Miles, bank, Poki","Personal save","Island save"};
+static void step_row(int row,int i,int st){
+    u32 n=g_step_n[i]; char d[40];
+    if(s_nicons<NSTEPS) s_icons[s_nicons++]=(Icon){(u8)row,(u8)st};
+    put(row,0,st==ST_WAIT||st==ST_SKIP?C_DIM:C_TEXT,"   %s",STEPNAME[i]);
+    switch(st){
+        case ST_RUN:  if(i==STEP_STATS||i==STEP_PERS) aden_snprintf(d,sizeof d,"checking");
+                      else aden_snprintf(d,sizeof d,"%u MB read",g_scan_mb); break;
+        case ST_OK:   if(i==STEP_MEM||i==STEP_GPU) aden_snprintf(d,sizeof d,"%u player%s",n,n==1?"":"s");
+                      else if(i==STEP_STATS) aden_snprintf(d,sizeof d,"%u of 3",n);
+                      else aden_snprintf(d,sizeof d,"%u cop%s",n,n==1?"y":"ies"); break;
+        case ST_FAIL: aden_snprintf(d,sizeof d,"not found"); break;
+        case ST_SKIP: aden_snprintf(d,sizeof d,"not needed"); break;
+        default:      aden_snprintf(d,sizeof d,"waiting"); break;
+    }
+    put(row,1,st==ST_FAIL?C_WARN:C_DIM,"%s",d);
+}
+/* returns 1 when it drew the page (the caller skips its tab) */
+static int loading_page(int island){
+    int ps=g_player_state, is=g_island_state;
+    int pfail= ps==3, ifail= island && ps==2 && is==3;
+    int busy= !pfail && !ifail && (ps<2 || (island && is<2));
+    if(!busy && !pfail && !ifail){
+        if(!s_seen_search) return 0;
+        if(!s_done_at) s_done_at=nn_os_GetSystemTick();
+        if(nn_os_GetSystemTick()-s_done_at>HOLD_TICKS){ s_seen_search=0; s_done_at=0; return 0; }
+    } else { s_done_at=0; if(busy) s_seen_search=1; }
+    const char* who= island && ps==2 ? "island" : "player";
+    if(pfail||ifail) put(ROW0,0,C_WARN,"Your %s data was not found",who);
+    else if(busy) put(ROW0,0,C_TEXT,"Looking for your %s data",who);
+    else if(island) text(ROW0,C_TEXT,"Island data found");
+    else { const char* nm=aden_player_name(aden_player_active()); put(ROW0,0,C_TEXT,"Found %s",nm[0]?nm:"your player"); }
+    if(busy) text(ROW0+1,C_DIM,"Reading the game's memory - a few seconds.");
+    int last= island ? STEP_ISLAND : STEP_PERS;
+    for(int i=0;i<=last;i++){
+        int st=__atomic_load_n(&g_step[i],__ATOMIC_ACQUIRE);
+        if(i<STEP_ISLAND && ps==0) st=ST_WAIT;         /* a new search is about to reset the rows */
+        if(i==STEP_ISLAND && is==0) st=ST_WAIT;
+        step_row(ROW0+3+i*2,i,st);
+    }
+    if(pfail||ifail){
+        text(ROW0+15,C_TEXT,"Load your island (not the title screen),");
+        text(ROW0+16,C_TEXT,"then press A to search again.");
+        text(ROW0+18,C_DIM,"Details: sdmc/aden/log.txt");
+        if(pr(B_A)){ s_status[0]=0; if(pfail) aden_player_find(); else g_island_state=0; }
+    }
+    return 1;
+}
+static const float SPIN[8][2]={{7,0},{4.95f,-4.95f},{0,-7},{-4.95f,-4.95f},{-7,0},{-4.95f,4.95f},{0,7},{4.95f,4.95f}};
+static const float CHK[6][2]={{-4,0},{-2.5f,-1.5f},{-1,-3},{0.6f,-1.2f},{2.2f,0.7f},{3.8f,2.6f}};
+static u32 mix(u32 a,u32 b,int t){   /* t/8 of the way from a to b, opaque */
+    u32 r=0; for(int s=8;s<32;s+=8){ int x=(a>>s)&255, y=(b>>s)&255; r|=(u32)(x+(y-x)*t/8)<<s; } return r|255;
+}
+static void draw_icon(float cx,float cy,int st){
+    switch(st){
+        case ST_RUN:   /* eight dots, the bright one going round clockwise */
+            for(int k=0;k<8;k++){ int d=((int)(s_frame/4)-k+64)&7; gfx_disk(cx+SPIN[k][0],cy+SPIN[k][1],2.2f,mix(C_HEADDK,C_LINE,d)); } break;
+        case ST_OK:   gfx_disk(cx,cy,9,C_OK); for(int k=0;k<6;k++) gfx_disk(cx+CHK[k][0],cy+CHK[k][1],1.6f,0xFFFFFFFF); break;
+        case ST_FAIL: gfx_disk(cx,cy,9,C_WARN); for(int k=-2;k<=2;k++){ gfx_disk(cx+k*1.6f,cy+k*1.6f,1.5f,0xFFFFFFFF); gfx_disk(cx+k*1.6f,cy-k*1.6f,1.5f,0xFFFFFFFF); } break;
+        case ST_SKIP: gfx_rect(cx-5,cy+1,10,2,C_DIM); break;
+        default:      gfx_disk(cx,cy,8,C_LINE); gfx_disk(cx,cy,6,C_PANEL); break;
+    }
+}
 static void tab_items(void){
     if(!s_items_loaded) load_items();
     if(!s_match) refilter();
     if(g_player_state==0) aden_player_find();   /* spawning needs the player data */
+    if(loading_page(0)) return;
     if(!s_nitems){ text(ROW0,C_WARN,"items.txt not found on SD card"); text(ROW0+1,C_DIM,"put it in sdmc/aden/items.txt"); return; }
     int* cur=&s_cur[TAB_ITEMS];
     if(*cur>s_nmatch-1) *cur= s_nmatch>0 ? s_nmatch-1 : 0;
@@ -286,9 +359,6 @@ static void tab_items(void){
     else if(g_player_state==2){ const char* nm=aden_player_name(aden_player_active());
         put(ROW0+24,0,C_TEXT,"Amount: %d (max %d)   To: %s of %s",q,mx,s_to_storage?"home storage":"pockets",nm[0]?nm:"you"); }
     else put(ROW0+24,0,C_TEXT,"Amount: %d (max %d)   To: %s",q,mx,s_to_storage?"home storage":"pockets");
-    if(g_player_state<2 && !s_status[0]) text(ROW0+22,C_DIM,"Finding your player data...");
-    if(g_player_state==3){ if(!s_status[0]) text(ROW0+22,C_WARN,"Player data not found - press A to search again");
-        if(pr(B_A)){ s_status[0]=0; aden_player_find(); return; } }   /* A retries instead of spawning */
     if(pr(B_X)) s_to_storage=!s_to_storage;
     if(pr(B_A) && s_nmatch){
         Item* it=si; const char* np=needs_param(it->id);
@@ -306,8 +376,7 @@ static void tab_items(void){
 static void tab_player(void){
     int* cur=&s_cur[TAB_PLAYER];
     if(g_player_state==0) aden_player_find();
-    if(g_player_state==1){ text(ROW0,C_TEXT,"Character stats"); text(ROW0+2,C_DIM,"Finding your player data..."); return; }
-    if(g_player_state==3){ text(ROW0,C_TEXT,"Character stats"); text(ROW0+2,C_WARN,"Could not find player data."); text(ROW0+3,C_DIM,"Press A to search again."); if(pr(B_A)) g_player_state=0; return; }
+    if(loading_page(0)) return;
     if(!aden_player_ready()){ text(ROW0+2,C_DIM,"Finding your player data..."); return; }
     /* Minus redoes the player search (not while the island thread reads the copies) */
     if(pr(B_MINUS) && g_island_state!=1){ s_status[0]=0; g_player_state=0; g_island_state=0; aden_player_find(); return; }
@@ -374,12 +443,10 @@ static void tab_player(void){
 }
 static void tab_island(void){
     int* cur=&s_cur[TAB_ISLAND];
-    text(ROW0,C_TEXT,"Island");
     if(g_player_state==0) aden_player_find();
-    if(g_player_state!=2){ text(ROW0+2,C_DIM,"Finding your player data first..."); return; }
-    if(g_island_state==0) aden_island_find();
-    if(g_island_state==1){ text(ROW0+2,C_DIM,"Finding your island data..."); return; }
-    if(g_island_state==3){ text(ROW0+2,C_WARN,"Could not find island data."); text(ROW0+3,C_DIM,"Press A to search again."); if(pr(B_A)) g_island_state=0; return; }
+    if(g_player_state==2 && g_island_state==0) aden_island_find();
+    if(loading_page(1)) return;
+    text(ROW0,C_TEXT,"Island");
     if(!aden_island_ready()){ text(ROW0+2,C_DIM,"Finding your island data..."); return; }
     int vk[10], nv=0; const char* vn[10]; int vf[10], vm[10];
     for(int k=0;k<10;k++) if(aden_villager_info(k,&vn[nv],&vf[nv],&vm[nv])) vk[nv++]=k;
@@ -520,6 +587,7 @@ static void draw_chrome(void){
         pos+=strlen(TABNAME[i])+5;
     }
     if(s_grid_on) draw_grid();
+    for(int i=0;i<s_nicons;i++) draw_icon(TX+9,CY-s_icons[i].row*20-8,s_icons[i].st);
     if(s_hl_row>=0){
         if(s_hl_key>=0) gfx_rrect(TX+s_hl_key*24-2,CY-s_hl_row*20+3,28,22,11,C_PILL);
         else            gfx_rrect(PX0+16,CY-s_hl_row*20+3,PW-32,22,11,C_PILL);
@@ -542,7 +610,7 @@ void aden_menu_draw(void){
     if(g_aden_open_request && !g_menu_open){ g_menu_open=1; s_armed=0; }
     /* after closing, give input back to the game only once the closing B (and all else) is released */
     if(!g_menu_open){ s_was_open=0; if(g_input_hold && aden_input_take()==0) g_input_hold=0; return; }
-    if(!s_was_open){ s_was_open=1; aden_log("menu opened"); }
+    if(!s_was_open){ s_was_open=1; s_seen_search=0; s_done_at=0; aden_log("menu opened"); }
     poll();
     /* ignore input until every button from the phone tap has been released */
     if(!s_armed){ if(s_now==0) s_armed=1; s_press=0; }
@@ -550,7 +618,7 @@ void aden_menu_draw(void){
         if(pr(B_L)) s_tab=(s_tab+NTABS-1)%NTABS;
         if(pr(B_R)) s_tab=(s_tab+1)%NTABS;
     }
-    s_hl_row=-1; s_hl_key=-1; s_grid_on=0;
+    s_hl_row=-1; s_hl_key=-1; s_grid_on=0; s_nicons=0; s_frame++;
     switch(s_tab){
         case TAB_ITEMS:  tab_items(); break;
         case TAB_PLAYER: tab_player(); break;
