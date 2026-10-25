@@ -117,6 +117,16 @@ void gfx_texture(u64 handle,float x,float y,float w,float h,int mode){
     float u=(mode&2) ? 128.f : 1.f, s[4]={0,0,u,u};
     void* cmd=*(void**)(prim_ctx()+0xb8);
     draw(cmd,handle,d,s);
+    /* Eden runs DrawTexture as a blit that leaves the Vulkan viewport and scissor on the icon's
+       box without marking them stale (its BlitColor misses InvalidateState), and it re-sends
+       them only when the guest registers change: the rest of the frame, and every later frame,
+       was clipped to that box (beta.13: black screen while the menu was open). Writing a
+       different viewport/scissor and then the full target marks them changed, so they are sent
+       again. NVN pointers from the game's proc table (GOT main+0x4acfda8 / main+0x4acf290). */
+    void (*vp)(void*,int,int,int,int)=**(void***)(g_main_base+0x4acfda8);
+    void (*sc)(void*,int,int,int,int)=**(void***)(g_main_base+0x4acf290);
+    if(vp){ vp(cmd,0,0,1,1); vp(cmd,0,0,(int)s_tw,(int)s_th); }
+    if(sc){ sc(cmd,0,0,1,1); sc(cmd,0,0,(int)s_tw,(int)s_th); }
 }
 
 volatile u32 g_render_frame;   /* frames drawn: the icon loader steps once per frame */

@@ -200,7 +200,7 @@ HIDDEN void aden_icons_want(int n,const u16* ids,const char* fams){
 }
 HIDDEN int aden_icons_on(void){ return s_state>=0 && !icons_off(); }
 HIDDEN int aden_icon_mode(void){
-    if(s_mode<0){ s_mode=0; FsFile f; if(aden_sd_ready() && !nn_fs_OpenFile(&f,MODE_FILE,FS_READ)){ char c=0; nn_fs_ReadFile(f,0,&c,1); nn_fs_CloseFile(f); if(c>='0'&&c<='3') s_mode=c-'0'; } }
+    if(s_mode<0){ s_mode=3;   /* Eden reads the source region in texels; upper-left origin is the likely one */ FsFile f; if(aden_sd_ready() && !nn_fs_OpenFile(&f,MODE_FILE,FS_READ)){ char c=0; nn_fs_ReadFile(f,0,&c,1); nn_fs_CloseFile(f); if(c>='0'&&c<='3') s_mode=c-'0'; } }
     return s_mode;
 }
 HIDDEN void aden_icon_mode_set(int m){
