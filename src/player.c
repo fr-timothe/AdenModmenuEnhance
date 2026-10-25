@@ -1,8 +1,11 @@
 #include "nn.h"
 /* Player data (ACNH 3.0.2). Layout found by memory analysis:
-     P-0xB8 : pocket 2, 20 slots, then at P-0x18 its u32 count (0, 10 or 20: the bag upgrades) and 5 x 0xFFFFFFFF
+     P-0xB8 : pocket 2, 20 slots, then at P-0x18 its u32 count (0, 10 or 20: the bag upgrades) and 20 bytes
      P      : pocket 1, 20 slots of { u16 id; u8 sys; u8 add; u32 param }  (empty id = 0xFFFE)
-     P+0xA0 : u32 pocket 1 count (20), then 20 bytes that are not always 0xFF
+     P+0xA0 : u32 pocket 1 count (20), then 20 bytes
+              the 20 bytes after each count are one per slot, 0xFF when unused; they change as the player
+              moves items (tester: 03 01 02 ff 00 ff ...), so neither block is checked: requiring 0xFF after
+              pocket 2 rejected players whose pocket 2 had been used (beta.6: 0 players on another save)
               (a 3.0.3 save with the first upgrade: pocket 2 count 10, then 03 01 02 ff 00 ff ...)
               slots 0-19 are at P, slots 20..size-1 at P-0xB8 (see pocket_size)
      P+0xB8 : wallet Bells as EncryptedInt32 { u32 enc; u16 adjust; u8 shift; u8 checksum }
@@ -68,11 +71,11 @@ static int slot_ok(const u8* p){
     if(id==0xFFFE) return *(const u16*)(p+2)==0 && *(const u32*)(p+4)==0;
     return id<0xFFFE;   /* newer ids may be missing from our name list */
 }
+static int count1_ok(u32 n){ return n==20 || n==30 || n==40; }
 static int count2_ok(u32 n){ return n==0 || n==10 || n==20; }
 static int sig_ok(uptr P){
     if(!count2_ok(*(u32*)(P-0x18))) return 0;
-    for(int i=0;i<5;i++) if(*(u32*)(P-0x14+i*4)!=0xFFFFFFFF) return 0;
-    u32 n=*(u32*)(P+0xA0); if(n!=20 && n!=30 && n!=40) return 0;
+    if(!count1_ok(*(u32*)(P+0xA0))) return 0;
     for(int i=0;i<20;i++) if(!slot_ok((u8*)(P+i*8))) return 0;
     return enc_valid((EncInt*)(P+0xB8));
 }
@@ -166,7 +169,7 @@ static void scan_players(int dev, int* empty){
         if(scan_ok(&mi,dev)){
             for(uptr P=mi.addr+0x20; P+0xC0<end; P+=8){
                 if(!(P&(SCAN_CHUNK-1)) && (!scan_nap(P,&end,dev) || P+0xC0>=end)) break;
-                if(*(u32*)(P-4)!=0xFFFFFFFF || !count2_ok(*(u32*)(P-0x18))) continue;
+                if(!count1_ok(*(u32*)(P+0xA0)) || !count2_ok(*(u32*)(P-0x18))) continue;
                 if(!sig_ok(P)) continue;
                 if(base_ok(P)){
                     u32 pid=*(u32*)(P-PERS_P+PERS_ID_PID);
