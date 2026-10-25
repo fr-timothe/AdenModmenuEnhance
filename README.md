@@ -11,7 +11,8 @@ game with no PC tools needed.
 - **Items**: search all 10,000+ items, spawn any amount into your pockets or home storage
 - **Player**: edit Bells, Nook Miles, bank savings and Poki; learn every DIY recipe and reaction
 - **Island**: turnip prices, villager friendship, move-out flag
-- **Mods**: turn romfs mods in `sd:/aden/mods` on and off from inside the game
+- **Mods**: turn romfs mods in `sd:/aden/mods` on and off from inside the game, plus a built-in
+  Stack 99 switch (safe item kinds stack to 99, from the Stack99 mod by PlebGeneral)
 - Custom animated "A" app icon on the phone
 
 Downloads and install instructions are on the GameBanana page.
@@ -57,6 +58,7 @@ It's plain C with no devkitPro or libnx: the SDK functions it needs are imported
 | `src/input.c` | controller input |
 | `src/player.c` | player and island save data |
 | `src/romfs.c` | file redirection and the mod manager |
+| `src/stack.c` | Stack 99: patches the game's ItemKind table in memory |
 | `src/tables.c` | recipe, reaction and villager tables (generated from NHSE) |
 
 ## Building

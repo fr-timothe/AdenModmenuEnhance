@@ -152,6 +152,7 @@ static void refilter(void){
 
 /* ---------- mods: folders in sd:/aden/mods, on/off kept in sd:/aden/mods_on.txt ---------- */
 int aden_mod_is_on(const char*); void aden_mod_set(const char*,int);
+int aden_stack99_on(void); int aden_stack99_found(void); int aden_stack99_set(int);
 typedef struct { char name[64]; int on, on_at_start, romfs, exefs; } Mod;
 static Mod s_mods[64]; static int s_nmods; static char s_modmsg[96]; static int s_mods_scanned;
 static int dir_exists(const char* p){ FsDir d; if(nn_fs_OpenDirectory(&d,p,3)) return 0; nn_fs_CloseDirectory(d); return 1; }
@@ -191,7 +192,7 @@ static char s_status[96];
 static int s_was_open, s_armed;
 #define ROW0 0
 #define LIST 18
-#define MODLIST 17   /* mod rows that fit above the message line */
+#define MODLIST 16   /* mod rows that fit above the hint and message lines */
 
 /* pocket-style grid: GCOLS x GROWS tiles per page. tab_items fills the tile state, draw_grid
    draws the tiles (primitives) and draw_grid_text the labels: one print per column, since the
@@ -410,30 +411,46 @@ static void tab_island(void){
 }
 static void tab_mods(void){
     if(!s_mods_scanned) scan_mods();
-    int* cur=&s_cur[TAB_MODS]; int* top=&s_top[TAB_MODS];
+    /* row 0 is the built-in Stack 99 switch, rows 1.. the mod folders */
+    int* cur=&s_cur[TAB_MODS]; int* top=&s_top[TAB_MODS]; int nrows=s_nmods+1;
     text(ROW0,C_TEXT,"Mod manager");
     text(ROW0+1,C_DIM,"Mods go in sdmc/aden/mods/<name>/romfs/...");
     text(ROW0+2,C_DIM,"A turns a mod on/off. Applies when the game restarts.");
-    if(s_nmods==0){ text(ROW0+4,C_TEXT,"No mods yet. Copy a romfs mod folder into"); text(ROW0+5,C_TEXT,"sdmc/aden/mods, then reopen this tab."); }
-    if(up()&&*cur>0)(*cur)--; if(down()&&*cur<s_nmods-1)(*cur)++;
+    if(up()&&*cur>0)(*cur)--; if(down()&&*cur<nrows-1)(*cur)++;
     if(*cur<*top) *top=*cur; if(*cur>=*top+MODLIST) *top=*cur-MODLIST+1;
-    for(int i=0;i<MODLIST && *top+i<s_nmods;i++){
-        Mod* m=&s_mods[*top+i];
+    for(int i=0;i<MODLIST && *top+i<nrows;i++){
+        int r=*top+i;
+        if(*top+i==*cur) s_hl_row=ROW0+4+i;
+        if(r==0){
+            put(ROW0+4+i,0,C_TEXT,"[%s] Stack 99 (built-in)",aden_stack99_on()?"ON ":"off");
+            put(ROW0+4+i,1,C_DIM,"%s",aden_stack99_found()?"live":"next start");
+            continue;
+        }
+        Mod* m=&s_mods[r-1];
         const char* kind = m->romfs ? (m->exefs?"romfs only":"") : (m->exefs?"code mod: use Eden":"no romfs folder");
         put(ROW0+4+i,0,C_TEXT,"[%s] %s",m->on?"ON ":"off",m->name);
         if(m->on!=m->on_at_start) put(ROW0+4+i,1,C_WARN,"restart needed");
         else if(kind[0]) put(ROW0+4+i,1,C_DIM,"%s",kind);
-        if(*top+i==*cur) s_hl_row=ROW0+4+i;
     }
-    if(pr(B_A) && s_nmods){
-        Mod* m=&s_mods[*cur];
+    if(s_nmods==0){ text(ROW0+6,C_TEXT,"No mods yet. Copy a romfs mod folder into"); text(ROW0+7,C_TEXT,"sdmc/aden/mods, then reopen this tab."); }
+    if(*cur==0){
+        text(ROW0+20,C_DIM,"Fruit, materials, flowers, shells... stack to 99.");
+        text(ROW0+21,C_DIM,"Before turning it off, split stacks over the normal max.");
+    }
+    if(pr(B_A) && *cur==0){
+        int on=!aden_stack99_on(), n=aden_stack99_set(on);
+        if(n<0) aden_snprintf(s_modmsg,sizeof s_modmsg,"Stack 99 is now %s - restart the game to apply",on?"ON":"off");
+        else aden_snprintf(s_modmsg,sizeof s_modmsg,"Stack 99 is now %s (%d item kinds changed)",on?"ON":"off",n);
+    }
+    else if(pr(B_A)){
+        Mod* m=&s_mods[*cur-1];
         if(!m->romfs){ aden_snprintf(s_modmsg,sizeof s_modmsg, m->exefs?"%s is a code mod - turn it on in Eden instead":"%s has no romfs folder",m->name); }
         else {
             m->on=!m->on; aden_mod_set(m->name,m->on);
             aden_snprintf(s_modmsg,sizeof s_modmsg,"%s is now %s - restart the game to apply",m->name,m->on?"ON":"off");
         }
     }
-    if(pr(B_Y)){ scan_mods(); if(*cur>s_nmods-1) *cur=s_nmods>0?s_nmods-1:0; if(*top>*cur) *top=*cur;   /* the list may have shrunk */
+    if(pr(B_Y)){ scan_mods(); if(*cur>s_nmods) *cur=s_nmods; if(*top>*cur) *top=*cur;   /* the list may have shrunk */
         aden_snprintf(s_modmsg,sizeof s_modmsg,"%d mods found",s_nmods); }
     text(26,C_DIM,"A on/off   Y rescan folder   B close");
     if(s_modmsg[0]) text(ROW0+22,C_DIM,s_modmsg);

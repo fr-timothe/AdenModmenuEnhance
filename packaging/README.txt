@@ -33,6 +33,10 @@ MOD MANAGER
 - Put romfs mods in sdmc/aden/mods/<ModName>/romfs/...
 - A turns a mod on/off; restart the game to apply. Y rescans the folder.
 - Code mods (exefs / .pchtxt / .ips) can't be loaded in-game: turn those on in Eden.
+- Stack 99 (first row, built in): fruit, materials, flowers, shells and other safe items
+  stack to 99, like the Stack99 mod by PlebGeneral. "live" means the switch acts right away;
+  "next start" means it applies when the game restarts. Before turning it off, split stacks
+  that are bigger than the normal max. Don't use it together with the Stack99 romfs mod.
 
 NOTES
 - Back up your save before big edits (Eden: right-click game > Open Save Data Location).

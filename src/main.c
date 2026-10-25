@@ -34,4 +34,5 @@ void aden_module_init(void){
     extern void aden_gfx_install(void); aden_gfx_install();
     extern void aden_input_install(void); aden_input_install();
     extern void aden_romfs_install(void); aden_romfs_install();
+    extern void aden_stack99_install(void); aden_stack99_install();
 }

@@ -111,6 +111,7 @@ static void build(void){
     aden_log("romfs overrides: %d files total (%d from Aden Modmenu)", s_nfiles, own);
 }
 
+void aden_stack99_opened(const char*, FsFile);
 static Result (*o_open)(FsFile*, const char*, int);
 static Result h_open(FsFile* f, const char* path, int mode){
     if(path && memcmp(path,"content:/",9)==0){
@@ -121,14 +122,17 @@ static Result h_open(FsFile* f, const char* path, int mode){
             if(__atomic_compare_exchange_n(&s_state,&z,1,0,__ATOMIC_ACQUIRE,__ATOMIC_ACQUIRE)){ build(); __atomic_store_n(&s_state,2,__ATOMIC_RELEASE); st=2; }
             else st=z;
         }
+        Result r=1;
         if(st==2 && s_nfiles){
             Ent* e=find(path+9);
             if(e){
-                Result r=o_open(f,e->src,mode);
-                if(r==0) return 0;
-                aden_log("redirect %s failed (%x), using the game's file", path+9, r);
+                r=o_open(f,e->src,mode);
+                if(r) aden_log("redirect %s failed (%x), using the game's file", path+9, r);
             }
         }
+        if(r) r=o_open(f,path,mode);
+        if(r==0) aden_stack99_opened(path+9,*f);   /* Stack 99 finds the ItemKind table through its handle */
+        return r;
     }
     return o_open(f,path,mode);
 }
