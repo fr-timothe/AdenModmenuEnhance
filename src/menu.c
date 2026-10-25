@@ -153,6 +153,13 @@ static void refilter(void){
 /* ---------- mods: folders in sd:/aden/mods, on/off kept in sd:/aden/mods_on.txt ---------- */
 int aden_mod_is_on(const char*); void aden_mod_set(const char*,int);
 int aden_stack99_on(void); int aden_stack99_found(void); int aden_stack99_set(int);
+int aden_split_stacks(int (*maxof)(u16), int* need, int* have);
+/* normal max stack of an item (items.txt is built from the unmodded ItemKind table); 0 if unknown */
+static int item_stack(u16 id){
+    if(!s_items_loaded) load_items();
+    for(int i=0;i<s_nitems;i++) if(s_items[i].id==id) return s_items[i].stack;
+    return 0;
+}
 typedef struct { char name[64]; int on, on_at_start, romfs, exefs; } Mod;
 static Mod s_mods[64]; static int s_nmods; static char s_modmsg[96]; static int s_mods_scanned;
 static int dir_exists(const char* p){ FsDir d; if(nn_fs_OpenDirectory(&d,p,3)) return 0; nn_fs_CloseDirectory(d); return 1; }
@@ -435,10 +442,20 @@ static void tab_mods(void){
     if(s_nmods==0){ text(ROW0+6,C_TEXT,"No mods yet. Copy a romfs mod folder into"); text(ROW0+7,C_TEXT,"sdmc/aden/mods, then reopen this tab."); }
     if(*cur==0){
         text(ROW0+20,C_DIM,"Fruit, materials, flowers, shells... stack to 99.");
-        text(ROW0+21,C_DIM,"Before turning it off, split stacks over the normal max.");
+        text(ROW0+21,C_DIM,"Turning it off splits bigger stacks in pockets and storage.");
     }
     if(pr(B_A) && *cur==0){
-        int on=!aden_stack99_on(), n=aden_stack99_set(on);
+        int on=!aden_stack99_on();
+        /* off: split stacks over the normal max first, or the game shows them as 1 */
+        if(!on){
+            int need, have, k=aden_split_stacks(item_stack,&need,&have);
+            if(k==-1){ if(g_player_state!=1) aden_player_find();
+                aden_snprintf(s_modmsg,sizeof s_modmsg,"Finding your player data to split stacks - press A again"); return; }
+            if(k==-2){ aden_snprintf(s_modmsg,sizeof s_modmsg,"Pockets or storage look wrong - Stack 99 stays ON"); return; }
+            if(k==-3){ aden_snprintf(s_modmsg,sizeof s_modmsg,"Need %d free slots (pockets+storage), have %d - Stack 99 stays ON",need,have); return; }
+            if(k>0) aden_log("stack 99 off: %d stacks split", k);
+        }
+        int n=aden_stack99_set(on);
         if(n<0) aden_snprintf(s_modmsg,sizeof s_modmsg,"Stack 99 is now %s - restart the game to apply",on?"ON":"off");
         else aden_snprintf(s_modmsg,sizeof s_modmsg,"Stack 99 is now %s (%d item kinds changed)",on?"ON":"off",n);
     }
