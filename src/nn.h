@@ -11,6 +11,8 @@ Result nn_fs_CreateFile(const char*, s64)     __asm__("_ZN2nn2fs10CreateFileEPKc
 Result nn_fs_DeleteFile(const char*)          __asm__("_ZN2nn2fs10DeleteFileEPKc");
 Result nn_fs_OpenFile(FsFile*, const char*, int) __asm__("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci");
 Result nn_fs_ReadFile(FsFile, s64, void*, u64)   __asm__("_ZN2nn2fs8ReadFileENS0_10FileHandleElPvm");
+Result nn_fs_ReadFileOut(u64*, FsFile, s64, void*, u64) __asm__("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvm");
+Result nn_fs_ReadFileOpt(u64*, FsFile, s64, void*, u64, const void*) __asm__("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvmRKNS0_10ReadOptionE");
 Result nn_fs_WriteFile(FsFile, s64, const void*, u64, const FsWriteOption*) __asm__("_ZN2nn2fs9WriteFileENS0_10FileHandleElPKvmRKNS0_11WriteOptionE");
 Result nn_fs_GetFileSize(s64*, FsFile)        __asm__("_ZN2nn2fs11GetFileSizeEPlNS0_10FileHandleE");
 Result nn_fs_FlushFile(FsFile)                __asm__("_ZN2nn2fs9FlushFileENS0_10FileHandleE");

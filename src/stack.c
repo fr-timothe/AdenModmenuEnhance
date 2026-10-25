@@ -100,13 +100,13 @@ HIDDEN void aden_stack99_opened(const char* rel, FsFile f){
     s_kind_h=f.h;
     aden_log("ItemKind.bcsv opened");
 }
-static Result (*o_read)(FsFile, s64, void*, u64);
-static Result h_read(FsFile f, s64 off, void* buf, u64 size){
-    Result r=o_read(f,off,buf,size);
-    if(r || !s_kind_h || f.h!=s_kind_h) return r;
+/* the game reads files through any of the three nn::fs::ReadFile overloads (3.0.3 imports all of them;
+   beta.6 hooked only the plain one and never saw the table) */
+static void seen(FsFile f, s64 off, void* buf, u64 size){
+    if(!s_kind_h || f.h!=s_kind_h) return;
     Table t; static int s_parts;
     /* a read of a part (header first, then rows) is not a whole table: keep watching the handle */
-    if(off!=0 || !table(buf,size,&t)){ if(s_parts++<8) aden_log("ItemKind.bcsv partial read (offset %lx, %lx bytes)", off, size); return r; }
+    if(off!=0 || !table(buf,size,&t)){ if(s_parts++<8) aden_log("ItemKind.bcsv partial read (offset %lx, %lx bytes)", off, size); return; }
     s_kind_h=0;
     lock();
     int at=-1; for(int i=0;i<s_nbuf;i++) if(s_buf[i].p==buf) at=i;
@@ -114,8 +114,27 @@ static Result h_read(FsFile f, s64 off, void* buf, u64 size){
     int n= at>=0 && read_on() ? apply(&s_buf[at],1) : 0;
     unlock();
     aden_log("ItemKind table at %p: %u kinds, stack 99 %s (%d rows set)", buf, t.n, s_on>0?"on":"off", n);
+}
+static Result (*o_read)(FsFile, s64, void*, u64);
+static Result h_read(FsFile f, s64 off, void* buf, u64 size){
+    Result r=o_read(f,off,buf,size);
+    if(!r) seen(f,off,buf,size);
+    return r;
+}
+static Result (*o_read_out)(u64*, FsFile, s64, void*, u64);
+static Result h_read_out(u64* got, FsFile f, s64 off, void* buf, u64 size){
+    Result r=o_read_out(got,f,off,buf,size);
+    if(!r) seen(f,off,buf,got?*got:size);
+    return r;
+}
+static Result (*o_read_opt)(u64*, FsFile, s64, void*, u64, const void*);
+static Result h_read_opt(u64* got, FsFile f, s64 off, void* buf, u64 size, const void* opt){
+    Result r=o_read_opt(got,f,off,buf,size,opt);
+    if(!r) seen(f,off,buf,got?*got:size);
     return r;
 }
 void aden_stack99_install(void){
     aden_hook((uptr)&nn_fs_ReadFile,(void*)h_read,(void**)&o_read);
+    aden_hook((uptr)&nn_fs_ReadFileOut,(void*)h_read_out,(void**)&o_read_out);
+    aden_hook((uptr)&nn_fs_ReadFileOpt,(void*)h_read_opt,(void**)&o_read_opt);
 }
