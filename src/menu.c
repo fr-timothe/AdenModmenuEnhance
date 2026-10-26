@@ -931,10 +931,10 @@ static void tab_about(void){
         if(pr(B_A)){ if(on) aden_icons_disable(); else aden_icons_enable(); }
         hint= on ? "A icons off   ZL/ZR page   L/R tabs   B close" : "A icons on   ZL/ZR page   L/R tabs   B close";
     } else {
-        at(1,21,C_DIM,"Built by"); at(2,21,C_TEXT,"AdenDev");
-        at(4,21,C_DIM,"Item names and data"); at(5,21,C_TEXT,"NHSE by kwsch");
-        at(7,21,C_DIM,"License"); at(8,21,C_TEXT,"GPL-3.0");
-        at(10,21,C_DIM,"Found a bug? Send this file:"); at(11,21,C_TEXT,"sdmc/aden/log.txt");
+        at(1,21,C_DIM,"Made by"); at(2,21,C_TEXT,"AdenDev"); at(3,21,C_TEXT,"Timothe Montfrond (fr-timothe)");
+        at(5,21,C_DIM,"Item names and data"); at(6,21,C_TEXT,"NHSE by kwsch");
+        at(8,21,C_DIM,"License"); at(9,21,C_TEXT,"GPL-3.0");
+        at(11,21,C_DIM,"Found a bug? Send this file:"); at(12,21,C_TEXT,"sdmc/aden/log.txt");
     }
     text(26,C_DIM,hint);
     s_paint=paint_about;

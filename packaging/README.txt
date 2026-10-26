@@ -74,4 +74,7 @@ TROUBLESHOOTING
     Post sdmc/aden/log.txt (Eden: %APPDATA%\eden\sdmc\aden\log.txt) with your report.
 
 CREDITS
+Made by AdenDev and Timothe Montfrond (fr-timothe).
 Save data layout, recipe list and villager names from NHSE by kwsch.
+Stack 99 follows the Stack99 mod by PlebGeneral.
+Source: https://github.com/fr-timothe/AdenModmenuEnhance
