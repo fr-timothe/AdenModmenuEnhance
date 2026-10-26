@@ -18,7 +18,7 @@ typedef struct {
     uptr  ctx2;       /* drawInfo+0x50 */
 } TextWriter;
 
-static void (*f_setup)(uptr);
+static void (*f_setup)(uptr,uptr);   /* GraphicsContext::apply(state, draw context) */
 static void (*f_u8to16)(u16*, int, const char*, int);
 static void (*f_print)(TextWriter*, const u16*, int, int, void*);
 
@@ -45,7 +45,7 @@ void gfx_text(float x, float y, float scale, u32 rgba, const char* s){
     { float ls=4.0f*scale; u32 lb; memcpy(&lb,&ls,4); tw._48=(u64)lb<<32; }
     tw.ctx2=*(uptr*)(info+0x50);
     static u16 w[2048];
-    f_setup(SIGA(TW_SETUP_ARG));
+    f_setup(SIGA(TW_SETUP_ARG),*(uptr*)(info+0x50));
     f_u8to16(w,2048,s,2047);
     f_print(&tw,w,-1,1,0);
 }
@@ -92,55 +92,49 @@ void gfx_rrect(float x,float y,float w,float h,float r,u32 rgba){
     gfx_disk(x+r,y-h+r,r,rgba); gfx_disk(x+w-r,y-h+r,r,rgba);
 }
 
-/* ---- item icons: nvnCommandBufferDrawTexture on the same command buffer as the primitives ----
-   Its region is in render-target pixels, so the menu space (1280x720, origin centre, y up) is
-   scaled to the target size. The viewport the draw info holds is the 1280x720 layout even when
-   docked, where the game renders 1920x1080 (beta.14 reset the viewport to 1280x720 there: the
-   rest of the frame went into the top-left two thirds, a black box over the screen), so the
-   size comes from the operation mode, read every frame since the console can be docked live.
-   Which way the window origin and the source units go is not known yet: mode bit 0 = upper-left
-   origin, bit 1 = source in texels (the texture size). */
-static float s_tw, s_th=720;
-extern volatile u32 g_render_frame;
-static void target_size(void){
-    /* GetOperationMode asks a system service: once every 120 frames is plenty */
-    static u32 next;
-    if(s_tw && g_render_frame-next>0x80000000u) return;
-    next=g_render_frame+120;
-    int docked= nn_oe_GetOperationMode()==1;
-    float w= docked ? 1920 : 1280, h= docked ? 1080 : 720;
-    if(w!=s_tw) aden_log("icons: target %dx%d (%s)", (int)w, (int)h, docked?"docked":"handheld");
-    s_tw=w; s_th=h;
+/* ---- item icons: agl's "texture" shader program on a unit quad (3.0.3) ----
+   nvnCommandBufferDrawTexture was a blit on Eden: no alpha (black icon backgrounds), state the
+   emulator lost track of (black screens), and a large frame-rate cost. The game draws its own
+   textured quads this way (main+0x38114c0): the alpha-blend GraphicsContext it uses for debug
+   text, the sampler bound to the icon's agl::TextureData, the "texture" program (ShaderHolder
+   program 5) and the DevTools quad drawer. The quad is a unit square centred on the origin,
+   placed with the same projection as the boxes. Research notes are kept outside the repo. */
+enum { A_GC_APPLY=0x37e4d90, A_PROG_ACT=0x3807810, A_SMP_APPLY=0x380d060, A_TEXQUAD=0x38466e0,
+       D_HOLDER_GOT=0x4abdd18 };
+static const struct { u32 off, w[3]; u8 third; } TQ_CHECK[]={   /* third word at +0x08, or +0x18 for look-alike prologues */
+    {A_TEXQUAD,{0xd10283ff,0xa9047bfd,0xf9002bfb},0x08}, {A_GC_APPLY,{0xd10203ff,0xa9027bfd,0xa9036ffc},0x08},
+    {A_PROG_ACT,{0xa9bd7bfd,0xa90157f6,0x91004016},0x18}, {A_SMP_APPLY,{0xa9bd7bfd,0xa90157f6,0xaa0003f4},0x18},
+    {0x38114c0,{0x90009568,0xf9468d08,0},0} };
+static int s_tq_ok;   /* 0 not checked, 1 code matches, -1 it does not */
+static int tq_check(void){
+    if(s_tq_ok) return s_tq_ok;
+    s_tq_ok=1;
+    for(unsigned i=0;i<sizeof TQ_CHECK/sizeof TQ_CHECK[0];i++){
+        const u32* c=(const u32*)(g_main_base+TQ_CHECK[i].off);
+        if(c[0]!=TQ_CHECK[i].w[0] || c[1]!=TQ_CHECK[i].w[1] || (TQ_CHECK[i].third && c[TQ_CHECK[i].third/4]!=TQ_CHECK[i].w[2])){
+            aden_log("icons: quad drawer code differs at main+%x - icons not drawn", TQ_CHECK[i].off); s_tq_ok=-1; break; }
+    }
+    if(s_tq_ok>0) aden_log("icons: drawing with the game's texture program");
+    return s_tq_ok;
 }
-void gfx_texture(u64 handle,float x,float y,float w,float h,int mode,int tw,int th){
-    if(!cur_ok || !handle) return;
-    target_size();
-    void (*draw)(void*,u64,const float*,const float*)=*(void**)(g_main_base+0x4b62bb8);
-    if(!draw) return;
-    float sx=s_tw/1280.f, sy=s_th/720.f, px=(x+640)*sx;
-    float d[4], top=(mode&1) ? (360-y)*sy : (y+360)*sy, bot=(mode&1) ? top+h*sy : top-h*sy;
-    d[0]=px; d[2]=px+w*sx; d[1]= top<bot ? top : bot; d[3]= top<bot ? bot : top;
-    float s[4]={0,0,(mode&2) ? (float)tw : 1.f,(mode&2) ? (float)th : 1.f};
-    void* cmd=*(void**)(prim_ctx()+0xb8);
-    draw(cmd,handle,d,s);
+/* draws the icon (sampler: agl::TextureSampler, td: its agl::TextureData) in the box given by its
+   top-left corner, menu space (1280x720, origin centre, y up); 0 if it could not */
+int gfx_icon(void* sampler,const void* td,float x,float y,float w,float h){
+    if(!cur_ok || tq_check()<0) return 0;
+    uptr ctx=prim_ctx();
+    u8** hp=*(u8***)(g_main_base+D_HOLDER_GOT); u8* holder= hp ? *hp : 0;
+    if(!holder || *(u32*)(holder+8)<6) return 0;
+    void* prog=(*(void***)(holder+0x10))[5];
+    if(!prog) return 0;
+    ((void(*)(uptr,uptr))(g_main_base+A_GC_APPLY))(SIGA(TW_SETUP_ARG),ctx);   /* straight alpha, no culling, no depth */
+    ((void(*)(void*,const void*))(g_main_base+A_SMP_APPLY))(sampler,td);
+    ((void(*)(void*,uptr))(g_main_base+A_PROG_ACT))(prog,ctx);
+    Mtx34 m={{w,0,0,x+w*0.5f, 0,h,0,y-h*0.5f, 0,0,1,0}};
+    static const Mtx44 proj={{1.f/640,0,0,0, 0,1.f/360,0,0, 0,0,0,0.5f, 0,0,0,1}};   /* as gfx_prim_begin */
+    static const Col white={1,1,1,1};
+    ((void(*)(uptr,void*,void*,const Mtx34*,const Mtx44*,const Col*))(g_main_base+A_TEXQUAD))(ctx,prog,sampler,&m,&proj,&white);
+    return 1;
 }
-/* after the last icon of the frame (icons are drawn as one batch at the end) */
-void gfx_texture_end(void){
-    if(!cur_ok) return;
-    void* cmd=*(void**)(prim_ctx()+0xb8);
-    /* Eden runs DrawTexture as a blit that leaves the Vulkan viewport and scissor on the icon's
-       box without marking them stale (its BlitColor misses InvalidateState), and it re-sends
-       them only when the guest registers change: the rest of the frame, and every later frame,
-       was clipped to that box (beta.13: black screen while the menu was open). Writing a
-       different viewport/scissor and then the full target marks them changed, so they are sent
-       again, once per frame. NVN pointers from the game's proc table (GOT main+0x4acfda8 /
-       main+0x4acf290). */
-    void (*vp)(void*,int,int,int,int)=**(void***)(g_main_base+0x4acfda8);
-    void (*sc)(void*,int,int,int,int)=**(void***)(g_main_base+0x4acf290);
-    if(vp){ vp(cmd,0,0,1,1); vp(cmd,0,0,(int)s_tw,(int)s_th); }
-    if(sc){ sc(cmd,0,0,1,1); sc(cmd,0,0,(int)s_tw,(int)s_th); }
-}
-
 volatile u32 g_render_frame;   /* frames drawn: the icon loader steps once per frame */
 static void (*o_dbgdraw)(void*, uptr);
 /* The game records its render layers on several threads at once, so only the

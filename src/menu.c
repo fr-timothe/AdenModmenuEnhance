@@ -5,7 +5,6 @@ void gfx_prim_begin(void);
 void gfx_rect(float x,float y,float w,float h,u32 rgba);
 void gfx_rrect(float x,float y,float w,float h,float r,u32 rgba);
 void gfx_disk(float cx,float cy,float r,u32 rgba);
-void gfx_texture_end(void);
 static int s_hl_row=-1, s_hl_key=-1;   /* highlight pill: content row, keyboard column */
 static void (*s_paint)(void);           /* the tab's shapes, drawn over the panel and under the text */
 static int s_status_row;                /* where the status line goes this frame */
@@ -262,10 +261,8 @@ static u16 s_grid_id[GPAGE]; static char s_grid_fc[GPAGE];
 void aden_icons_want(int n,const u16* ids,const char* fams); int aden_icon_draw(u16 id,char fam,float x,float y,float w,float h,int mode);
 int aden_icons_on(void); int aden_icon_mode(void); void aden_icon_mode_set(int); void aden_icons_enable(void); void aden_icons_disable(void);
 int aden_icon_ready(u16 id,char fam);
-/* Icons are drawn last, after every box and text of the frame. On Eden the DrawTexture blit
-   leaves its own pipeline bound without telling the state tracker, so a later draw that reused
-   the pipeline bound before it (our boxes) ran the blit's full-screen triangle instead: the black
-   screen, and a heavy one (beta.14). icon_at queues the icon and says if it will be drawn. */
+/* Icons are drawn last, after every box and text of the frame: their shader program replaces
+   the one the boxes use. icon_at queues the icon and says if it will be drawn. */
 typedef struct { u16 id; char fam; s8 mode; float x,y,w,h; } IconQ;
 static IconQ s_iq[24]; static int s_niq;
 static int icon_at(u16 id,char fam,float x,float y,float w,float h,int mode){
@@ -1033,9 +1030,7 @@ void aden_menu_draw(void){
     flush(TX,CY);
     flush_big();
     if(s_grid_on) draw_grid_text();
-    { int drawn=0;
-      for(int i=0;i<s_niq;i++) drawn|=aden_icon_draw(s_iq[i].id,s_iq[i].fam,s_iq[i].x,s_iq[i].y,s_iq[i].w,s_iq[i].h,s_iq[i].mode);
-      if(drawn) gfx_texture_end(); }
+    for(int i=0;i<s_niq;i++) aden_icon_draw(s_iq[i].id,s_iq[i].fam,s_iq[i].x,s_iq[i].y,s_iq[i].w,s_iq[i].h,s_iq[i].mode);
     s_niq=0;
     if(pr(B_B) && !s_typing && !s_pedit){ g_input_hold=1; g_menu_open=0; g_aden_open_request=0; s_status[0]=0; aden_log("menu closed"); }
 }

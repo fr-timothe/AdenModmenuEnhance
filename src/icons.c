@@ -217,7 +217,7 @@ HIDDEN void aden_icon_mode_set(int m){
 /* icons back on after the user asks (About tab) */
 HIDDEN void aden_icons_enable(void){ nn_fs_DeleteFile(OFF_FILE); nn_fs_DeleteFile(TRY_FILE); s_off=0; aden_log("icons: turned on"); }
 HIDDEN void aden_icons_disable(void){ nn_fs_CreateFile(OFF_FILE,0); s_off=1; aden_log("icons: turned off"); }
-void gfx_texture(u64 handle,float x,float y,float w,float h,int mode,int tw,int th);   /* gfx.c */
+int gfx_icon(void* sampler,const void* td,float x,float y,float w,float h);   /* gfx.c */
 /* 1 when the icon of id/fam is loaded and icons are on */
 HIDDEN int aden_icon_ready(u16 id,char fam){
     if(s_state<=0 || s_off) return 0;
@@ -232,7 +232,8 @@ HIDDEN int aden_icon_draw(u16 id,char fam,float x,float y,float w,float h,int mo
     for(int i=0;i<ICON_N;i++) if(s_ic[i].key==key && __atomic_load_n(&s_ic[i].st,__ATOMIC_ACQUIRE)==I_READY){
         /* the first draws of a session are guarded: a crash leaves the marker and turns icons off */
         if(!s_draws){ nn_fs_CreateFile(TRY_FILE,0); s_trying=1; stage(9,"first draw"); }
-        gfx_texture(s_ic[i].handle,x,y,w,h,mode,s_ic[i].tw,s_ic[i].th);
+        (void)mode;
+        if(!gfx_icon(s_sampler,s_ic[i].td,x,y,w,h)) return 0;
         if(s_trying && ++s_draws>300){ nn_fs_DeleteFile(TRY_FILE); s_trying=0; aden_log("icons: 300 draws done, no crash"); }
         else if(!s_trying) s_draws++;
         return 1;
