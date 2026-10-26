@@ -35,7 +35,7 @@ CONTROLS (menu open)
           ZL/ZR 100, X best natural price, Y zero. Villager: A best friend, Y reset, X moving out.
   Mods:   arrows move between cards, ZL/ZR page, A on/off, Minus undoes every change
           since the game started, Y rescans the folder.
-  About:  ZL/ZR changes page (Info, Controls, Icon check, Credits).
+  About:  ZL/ZR changes page (Info, Credits). On Info, A turns item icons on/off.
 
 MOD MANAGER
 - Put romfs mods in sdmc/aden/mods/<ModName>/romfs/...
@@ -49,8 +49,7 @@ MOD MANAGER
 
 ITEM ICONS (test, game 3.0.3)
 - The Items grid shows the game's own item icons, loaded only for the page on screen.
-- About tab, Icon check page: the shovel is drawn four ways. Pick with Left/Right the box where it looks right;
-  that variant is used in the grid. A turns icons on/off.
+- About tab, Info page: A turns item icons on/off.
 - If the game stops while icons are first drawn, icons turn themselves off at the next start.
   Send sdmc/aden/log.txt with a report.
 

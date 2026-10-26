@@ -5,6 +5,7 @@ void gfx_prim_begin(void);
 void gfx_rect(float x,float y,float w,float h,u32 rgba);
 void gfx_rrect(float x,float y,float w,float h,float r,u32 rgba);
 void gfx_disk(float cx,float cy,float r,u32 rgba);
+void gfx_texture_end(void);
 static int s_hl_row=-1, s_hl_key=-1;   /* highlight pill: content row, keyboard column */
 static void (*s_paint)(void);           /* the tab's shapes, drawn over the panel and under the text */
 static int s_status_row;                /* where the status line goes this frame */
@@ -900,13 +901,9 @@ static void tab_mods(void){
     s_paint=paint_mods;
 }
 
-/* ---------- About tab: a rail of pages (ZL/ZR) - Info, Controls, Icon check, Credits ---------- */
-static int s_apage, s_akey;
-static const char* const APAGE[4]={"Info","Controls","Icon check","Credits"};
-static const char* const KEYN[8]={"A","B","X","Y","L/R","ZL/ZR","-/+","D-pad"};
-static const char* const KEYD[8]={"use / toggle","close menu","pockets/storage","search items","change tab","page, family","amount","move"};
-static const char* const IMODE[4]={"lower-left, 0-1","upper-left, 0-1","lower-left, texels","upper-left, texels"};
-static const u16 SHOVEL=0x0833; static const char SHOVEL_FAM='M';
+/* ---------- About tab: a rail of two pages (ZL/ZR) - Info and Credits ---------- */
+static int s_apage;
+static const char* const APAGE[2]={"Info","Credits"};
 static u32 state_col(int st){ return st==2 ? C_OK : st==1 ? C_HEAD : st==3 ? C_WARN : C_OFF; }
 static void paint_about(void){
     box(16,108,150,440,18,C_WELL);
@@ -917,83 +914,34 @@ static void paint_about(void){
         dot(210,GY(5)+8,6,state_col(g_player_state==2?g_island_state:0));
         dot(210,GY(6)+8,6,aden_icons_on()?C_OK:C_OFF);
         dot(210,GY(7)+8,6,C_HEAD);
-    } else if(s_apage==1){
-        /* a Switch pad from disks and rounded boxes; the chosen key gets a yellow halo */
-        int k=s_akey;
-        static const float BTN[4][2]={{498,205},{474,225},{474,185},{450,205}};   /* A B X Y */
-        if(k==4||k==5){ box(220,107,108,36,18,C_PILL); box(404,107,108,36,18,C_PILL); }
-        box(226,112,96,26,13,C_TEXT); box(410,112,96,26,13,C_TEXT);
-        dot(252,262,42,C_BODY); dot(482,262,42,C_BODY); box(196,144,342,124,58,C_BODY);
-        dot(258,192,20,C_TEXT); dot(258,192,12,C_STICK); dot(434,244,20,C_TEXT); dot(434,244,12,C_STICK);
-        if(k==7) dot(300,238,28,C_PILL);
-        dot(300,222,9,C_TEXT); dot(300,254,9,C_TEXT); dot(284,238,9,C_TEXT); dot(316,238,9,C_TEXT);
-        if(k==6){ dot(338,185,13,C_PILL); dot(394,185,13,C_PILL); }
-        dot(338,185,8,C_TEXT); dot(394,185,8,C_TEXT);
-        for(int b=0;b<4;b++){ if(k==b) dot(BTN[b][0],BTN[b][1],15,C_PILL); dot(BTN[b][0],BTN[b][1],10,C_TEXT); }
-        box(k<4?190:374,GY(10+k%4)-3,176,22,11,C_PILL);
-    } else if(s_apage==2){
-        int on=aden_icons_on(), m=aden_icon_mode();
-        box(200,148,150,150,24,on?C_WELL:C_EMPTY);
-        if(on) icon_at(SHOVEL,SHOVEL_FAM,WX(215),WY(163),120,120,m);
-        for(int v=0;v<4;v++){
-            float x=200+96*v;
-            if(on && v==m) box(x-6,304,64,64,16,C_PILL);
-            box(x,310,52,52,0,on?C_WELL:C_EMPTY);
-            if(on) icon_at(SHOVEL,SHOVEL_FAM,WX(x+5),WY(315),42,42,v);
-        }
     }
 }
 static void tab_about(void){
-    if(pr(B_ZL)) s_apage=(s_apage+3)%4;
-    if(pr(B_ZR)) s_apage=(s_apage+1)%4;
-    for(int i=0;i<4;i++) at(1+2*i,2,i==s_apage?C_HEADDK:C_TEXT,"%s",APAGE[i]);
+    if(pr(B_ZL)||pr(B_ZR)||up()||down()) s_apage^=1;
+    for(int i=0;i<2;i++) at(1+2*i,2,i==s_apage?C_HEADDK:C_TEXT,"%s",APAGE[i]);
     at(18,2,C_DIM,"v%s",ADEN_VERSION); at(19,2,C_DIM,"ZL/ZR: page");
     const char* hint="ZL/ZR page   L/R tabs   B close";
     if(s_apage==0){
         big(198,120,1.6f,C_TEXT,"v%s",ADEN_VERSION);
         at(2,21,C_DIM,"for ACNH 3.0.2 / 3.0.3");
-        int ps=g_player_state, is=g_island_state;
+        int ps=g_player_state, is=g_island_state, on=aden_icons_on();
         at(4,24,C_TEXT,"Player data");
         if(ps==2){ int n=aden_player_count(); at(4,39,C_DIM,"found, %d player%s",n,n==1?"":"s"); }
         else at(4,39,ps==3?C_WARN:C_DIM,"%s",ps==1?"searching":ps==3?"not found":"not searched yet");
         at(5,24,C_TEXT,"Island");
         at(5,39,ps==2&&is==3?C_WARN:C_DIM,"%s",ps!=2||is==0?"waiting":is==1?"searching":is==2?"found":"not found");
-        at(6,24,C_TEXT,"Item icons");
-        if(aden_icons_on()) at(6,39,C_DIM,"ON, variant %d",aden_icon_mode()+1); else at(6,39,C_DIM,"off");
+        at(6,24,C_TEXT,"Item icons"); at(6,39,C_DIM,"%s",on?"ON":"off");
         at(7,24,C_TEXT,"Log file"); at(7,39,C_DIM,"sdmc:/aden/log.txt");
         at(9,21,C_HEADDK,"How to use");
         at(10,21,C_DIM,"Open it from the Nook Phone.");
         at(11,21,C_DIM,"B closes it. L/R changes tab.");
         at(12,21,C_DIM,"Your character is paused while it is open.");
-    } else if(s_apage==1){
-        if(up() && s_akey>0) s_akey--;
-        if(down() && s_akey<7) s_akey++;
-        at(0,28,C_WHITE,"L  ZL"); at(0,51,C_WHITE,"R  ZR");
-        at(3,38,C_WHITE,"-"); at(3,45,C_WHITE,"+");
-        at(3,55,C_WHITE,"X"); at(4,52,C_WHITE,"Y"); at(4,58,C_WHITE,"A"); at(5,55,C_WHITE,"B");
-        for(int i=0;i<8;i++){ int c= i<4 ? 21 : 44;
-            at(10+i%4,c,C_HEADDK,"%s",KEYN[i]); at(10+i%4,c+7,C_TEXT,"%s",KEYD[i]); }
-        at(15,21,C_DIM,"Up/Down picks a key; it lights on the pad.");
-        hint="Up/Down key   ZL/ZR page   B close";
-    } else if(s_apage==2){
-        int on=aden_icons_on(), m=aden_icon_mode();
-        at(0,21,C_TEXT,on?"Does the shovel look right?":"Item icons are off.");
-        if(on){
-            aden_icons_want(1,&SHOVEL,&SHOVEL_FAM);
-            at(2,44,C_TEXT,"Variant %d of 4",m+1); at(3,44,C_DIM,"%s",IMODE[m]);
-            at(5,44,C_TEXT,"A  icons off"); at(6,44,C_TEXT,"</> next variant"); at(7,44,C_DIM,"Saved on the SD");
-            if(left())  aden_icon_mode_set((m+3)&3);
-            if(right()) aden_icon_mode_set((m+1)&3);
-        } else {
-            at(5,30,C_DIM,"?");
-            at(2,44,C_TEXT,"A turns them on"); at(3,44,C_DIM,"to start the check.");
-        }
-        for(int v=0;v<4;v++) at(13,24+12*v,on?C_TEXT:C_DIM,"%d",v+1);
-        at(15,21,C_DIM,"The Items grid uses this variant.");
-        at(17,21,C_DIM,"If icons crash the game, they turn");
-        at(18,21,C_DIM,"off by themselves at the next start.");
+        at(14,21,C_HEADDK,"Item icons");
+        at(15,21,C_DIM,"The Items grid shows the game's icons.");
+        at(16,21,C_DIM,"If they crash the game, they turn off");
+        at(17,21,C_DIM,"by themselves at the next start.");
         if(pr(B_A)){ if(on) aden_icons_disable(); else aden_icons_enable(); }
-        hint="A on/off   Left/Right variant   ZL/ZR page";
+        hint= on ? "A icons off   ZL/ZR page   B close" : "A icons on   ZL/ZR page   B close";
     } else {
         at(0,21,C_TEXT,"Aden Modmenu"); at(1,21,C_DIM,"v%s for ACNH 3.0.2 / 3.0.3",ADEN_VERSION);
         at(3,21,C_DIM,"Built by"); at(4,21,C_TEXT,"AdenDev");
@@ -1085,7 +1033,9 @@ void aden_menu_draw(void){
     flush(TX,CY);
     flush_big();
     if(s_grid_on) draw_grid_text();
-    for(int i=0;i<s_niq;i++) aden_icon_draw(s_iq[i].id,s_iq[i].fam,s_iq[i].x,s_iq[i].y,s_iq[i].w,s_iq[i].h,s_iq[i].mode);
+    { int drawn=0;
+      for(int i=0;i<s_niq;i++) drawn|=aden_icon_draw(s_iq[i].id,s_iq[i].fam,s_iq[i].x,s_iq[i].y,s_iq[i].w,s_iq[i].h,s_iq[i].mode);
+      if(drawn) gfx_texture_end(); }
     s_niq=0;
     if(pr(B_B) && !s_typing && !s_pedit){ g_input_hold=1; g_menu_open=0; g_aden_open_request=0; s_status[0]=0; aden_log("menu closed"); }
 }
