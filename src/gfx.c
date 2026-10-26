@@ -99,7 +99,7 @@ void gfx_rrect(float x,float y,float w,float h,float r,u32 rgba){
    rest of the frame went into the top-left two thirds, a black box over the screen), so the
    size comes from the operation mode, read every frame since the console can be docked live.
    Which way the window origin and the source units go is not known yet: mode bit 0 = upper-left
-   origin, bit 1 = source in texels (128). */
+   origin, bit 1 = source in texels (the texture size). */
 static float s_tw, s_th=720;
 extern volatile u32 g_render_frame;
 static void target_size(void){
@@ -112,7 +112,7 @@ static void target_size(void){
     if(w!=s_tw) aden_log("icons: target %dx%d (%s)", (int)w, (int)h, docked?"docked":"handheld");
     s_tw=w; s_th=h;
 }
-void gfx_texture(u64 handle,float x,float y,float w,float h,int mode){
+void gfx_texture(u64 handle,float x,float y,float w,float h,int mode,int tw,int th){
     if(!cur_ok || !handle) return;
     target_size();
     void (*draw)(void*,u64,const float*,const float*)=*(void**)(g_main_base+0x4b62bb8);
@@ -120,7 +120,7 @@ void gfx_texture(u64 handle,float x,float y,float w,float h,int mode){
     float sx=s_tw/1280.f, sy=s_th/720.f, px=(x+640)*sx;
     float d[4], top=(mode&1) ? (360-y)*sy : (y+360)*sy, bot=(mode&1) ? top+h*sy : top-h*sy;
     d[0]=px; d[2]=px+w*sx; d[1]= top<bot ? top : bot; d[3]= top<bot ? bot : top;
-    float u=(mode&2) ? 128.f : 1.f, s[4]={0,0,u,u};
+    float s[4]={0,0,(mode&2) ? (float)tw : 1.f,(mode&2) ? (float)th : 1.f};
     void* cmd=*(void**)(prim_ctx()+0xb8);
     draw(cmd,handle,d,s);
     /* Eden runs DrawTexture as a blit that leaves the Vulkan viewport and scissor on the icon's
