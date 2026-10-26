@@ -101,7 +101,12 @@ void gfx_rrect(float x,float y,float w,float h,float r,u32 rgba){
    Which way the window origin and the source units go is not known yet: mode bit 0 = upper-left
    origin, bit 1 = source in texels (128). */
 static float s_tw, s_th=720;
+extern volatile u32 g_render_frame;
 static void target_size(void){
+    /* GetOperationMode asks a system service: once every 120 frames is plenty */
+    static u32 next;
+    if(s_tw && g_render_frame-next>0x80000000u) return;
+    next=g_render_frame+120;
     int docked= nn_oe_GetOperationMode()==1;
     float w= docked ? 1920 : 1280, h= docked ? 1080 : 720;
     if(w!=s_tw) aden_log("icons: target %dx%d (%s)", (int)w, (int)h, docked?"docked":"handheld");

@@ -260,6 +260,17 @@ static int s_grid_on, s_grid_n, s_grid_sel, s_grid_fam[GPAGE];
 static u16 s_grid_id[GPAGE]; static char s_grid_fc[GPAGE];
 void aden_icons_want(int n,const u16* ids,const char* fams); int aden_icon_draw(u16 id,char fam,float x,float y,float w,float h,int mode);
 int aden_icons_on(void); int aden_icon_mode(void); void aden_icon_mode_set(int); void aden_icons_enable(void); void aden_icons_disable(void);
+int aden_icon_ready(u16 id,char fam);
+/* Icons are drawn last, after every box and text of the frame. On Eden the DrawTexture blit
+   leaves its own pipeline bound without telling the state tracker, so a later draw that reused
+   the pipeline bound before it (our boxes) ran the blit's full-screen triangle instead: the black
+   screen, and a heavy one (beta.14). icon_at queues the icon and says if it will be drawn. */
+typedef struct { u16 id; char fam; s8 mode; float x,y,w,h; } IconQ;
+static IconQ s_iq[24]; static int s_niq;
+static int icon_at(u16 id,char fam,float x,float y,float w,float h,int mode){
+    if(s_niq>=24 || !aden_icon_ready(id,fam)) return 0;
+    s_iq[s_niq++]=(IconQ){id,fam,(s8)mode,x,y,w,h}; return 1;
+}
 static char s_glab[GCOLS][GROWS*(2*GLINE+8)+1];
 static char s_famtxt[24];
 /* copy at most GLINE characters, ending with '.' when the text is cut */
@@ -923,12 +934,12 @@ static void paint_about(void){
     } else if(s_apage==2){
         int on=aden_icons_on(), m=aden_icon_mode();
         box(200,148,150,150,24,on?C_WELL:C_EMPTY);
-        if(on) aden_icon_draw(SHOVEL,SHOVEL_FAM,WX(215),WY(163),120,120,m);
+        if(on) icon_at(SHOVEL,SHOVEL_FAM,WX(215),WY(163),120,120,m);
         for(int v=0;v<4;v++){
             float x=200+96*v;
             if(on && v==m) box(x-6,304,64,64,16,C_PILL);
             box(x,310,52,52,0,on?C_WELL:C_EMPTY);
-            if(on) aden_icon_draw(SHOVEL,SHOVEL_FAM,WX(x+5),WY(315),42,42,v);
+            if(on) icon_at(SHOVEL,SHOVEL_FAM,WX(x+5),WY(315),42,42,v);
         }
     }
 }
@@ -1008,7 +1019,7 @@ static void draw_grid(void){
         if(i==s_grid_sel) gfx_rrect(x-5,y+5,GTILE+10,GTILE+10,22,C_PILL);
         gfx_rect(x,y,GTILE,GTILE,C_TILE);
         /* the item's icon once it is loaded, its family colour until then */
-        if(!aden_icon_draw(s_grid_id[i],s_grid_fc[i],x+22,y-2,46,46,aden_icon_mode())) gfx_disk(x+GTILE*0.5f,y-27,15,FAMCOL[s_grid_fam[i]]);
+        if(!icon_at(s_grid_id[i],s_grid_fc[i],x+22,y-2,46,46,aden_icon_mode())) gfx_disk(x+GTILE*0.5f,y-27,15,FAMCOL[s_grid_fam[i]]);
     }
 }
 static void draw_grid_text(void){
@@ -1059,7 +1070,7 @@ void aden_menu_draw(void){
         if(pr(B_L)) s_tab=(s_tab+NTABS-1)%NTABS;
         if(pr(B_R)) s_tab=(s_tab+1)%NTABS;
     }
-    s_hl_row=-1; s_hl_key=-1; s_grid_on=0; s_nicons=0; s_frame++; s_paint=0; s_status_row=ROW0+LIST+4;
+    s_hl_row=-1; s_hl_key=-1; s_grid_on=0; s_nicons=0; s_frame++; s_paint=0; s_niq=0; s_status_row=ROW0+LIST+4;
     switch(s_tab){
         case TAB_ITEMS:  tab_items(); break;
         case TAB_PLAYER: tab_player(); break;
@@ -1074,5 +1085,7 @@ void aden_menu_draw(void){
     flush(TX,CY);
     flush_big();
     if(s_grid_on) draw_grid_text();
+    for(int i=0;i<s_niq;i++) aden_icon_draw(s_iq[i].id,s_iq[i].fam,s_iq[i].x,s_iq[i].y,s_iq[i].w,s_iq[i].h,s_iq[i].mode);
+    s_niq=0;
     if(pr(B_B) && !s_typing && !s_pedit){ g_input_hold=1; g_menu_open=0; g_aden_open_request=0; s_status[0]=0; aden_log("menu closed"); }
 }

@@ -213,6 +213,13 @@ HIDDEN void aden_icon_mode_set(int m){
 HIDDEN void aden_icons_enable(void){ nn_fs_DeleteFile(OFF_FILE); nn_fs_DeleteFile(TRY_FILE); s_off=0; aden_log("icons: turned on"); }
 HIDDEN void aden_icons_disable(void){ nn_fs_CreateFile(OFF_FILE,0); s_off=1; aden_log("icons: turned off"); }
 void gfx_texture(u64 handle,float x,float y,float w,float h,int mode);   /* gfx.c */
+/* 1 when the icon of id/fam is loaded and icons are on */
+HIDDEN int aden_icon_ready(u16 id,char fam){
+    if(s_state<=0 || s_off) return 0;
+    u32 key=id|kind_of(id,fam)<<16;
+    for(int i=0;i<ICON_N;i++) if(s_ic[i].key==key && __atomic_load_n(&s_ic[i].st,__ATOMIC_ACQUIRE)==I_READY) return 1;
+    return 0;
+}
 /* draws the icon of id/fam in the box (menu space, top-left corner, y up); 0 if it is not ready */
 HIDDEN int aden_icon_draw(u16 id,char fam,float x,float y,float w,float h,int mode){
     if(s_state<=0 || s_off) return 0;
