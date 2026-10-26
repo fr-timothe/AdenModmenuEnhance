@@ -20,6 +20,7 @@ extern volatile int g_island_state; void aden_island_find(void); int aden_island
 u32 aden_turnip_sell(void); u32 aden_turnip_buy(void); void aden_turnip_set(int,u32);
 int aden_villager_info(int,const char**,int*,int*); void aden_villager_friend(int,u8); void aden_villager_moving(int,int);
 int aden_villager_species(int); int aden_turnip_week(u32*);
+int aden_weeds_count(void); int aden_weeds_clear(void);
 int aden_pocket_free(void); int aden_pocket_slots(void); int aden_reactions_total(void);
 u32 aden_wallet_get(void); void aden_wallet_set(u32); int aden_pocket_add(u16 id,int qty,int stack);
 extern volatile int g_player_state;
@@ -660,7 +661,9 @@ static const char* const SPECIES[35]={"Anteater","Bear","Bird","Bull","Cat","Cub
 static const u32 VCOL[8]={0x9DB0CCFF,0xD9B48AFF,0xE9A3C9FF,0xA9CDEBFF,0xF2A65AFF,0xE8C547FF,0xF08A6CFF,0xC79C6EFF};
 /* friendship level 1-6 from the 0-255 points, 0 if not met */
 static int flevel(int f){ return f<0?0 : f<25?1 : f<70?2 : f<100?3 : f<150?4 : f<200?5 : 6; }
-static struct { int nv, vk[10], vf[10], vm[10], vs[10]; const char* vn[10]; u32 sell, buy, week[12]; } I;
+static struct { int nv, vk[10], vf[10], vm[10], vs[10], weeds; const char* vn[10]; u32 sell, buy, week[12]; } I;
+#define WEED_ROW 18   /* screen row of the Weeds line, below the longest villager list */
+#define C_WEED 0x7DBF5AFF
 static int s_itk;   /* the ticket Up goes back to from the list */
 static void paint_island(void){
     int cur=s_cur[TAB_ISLAND];
@@ -673,7 +676,10 @@ static void paint_island(void){
     box(16,204,220,356,18,C_WELL);
     dot(46,244,7,C_HEAD);
     for(int i=0;i<I.nv;i++) dot(46,264+20*i,7,I.vs[i]<0?C_OFF:VCOL[I.vs[i]%8]);
-    if(cur>=2) box(22,GY(6+cur-2)-3,208,22,11,C_PILL);
+    dot(46,GY(WEED_ROW)+8,7,C_WEED);
+    int weed= cur==3+I.nv;
+    if(weed) box(22,GY(WEED_ROW)-3,208,22,11,C_PILL);
+    else if(cur>=2) box(22,GY(6+cur-2)-3,208,22,11,C_PILL);
     for(int i=0;i<I.nv;i++) if(I.vm[i]) box(152,GY(7+i)-1,40,18,9,C_WARNBG);
     box(244,204,310,356,18,C_WHITE);
     if(cur<2){
@@ -682,6 +688,11 @@ static void paint_island(void){
             for(int i=0;i<12;i++){ float h=I.week[i]*70.f/999; if(h<2) h=2; if(h>70) h=70; box(264+23*i,530-h,17,h,4,C_HEAD); }
             box(262,530,276,2,0,C_LINE);
         }
+    } else if(weed){
+        dot(294,244,28,C_WEED);
+        box(262,366,276,2,0,C_LINE);
+        dot(274,GY(13)+8,12,C_HEADDK);
+        box(262,GY(16)-6,276,92,14,C_WARNBG);   /* the "seen after a loading screen" warning */
     } else {
         int i=cur-3, f= i<0 ? -1 : I.vf[i], L=flevel(f);
         dot(294,244,28,i<0?C_HEAD:(I.vs[i]<0?C_OFF:VCOL[I.vs[i]%8]));
@@ -703,8 +714,8 @@ static void tab_island(void){
     if(!aden_island_ready()){ text(ROW0+2,C_DIM,"Finding your island data..."); return; }
     I.nv=0;
     for(int k=0;k<10;k++) if(aden_villager_info(k,&I.vn[I.nv],&I.vf[I.nv],&I.vm[I.nv])){ I.vk[I.nv]=k; I.vs[I.nv]=aden_villager_species(k); I.nv++; }
-    /* rows: the two tickets side by side (Left/Right), then Everyone, then each villager */
-    int NROWS=3+I.nv;
+    /* rows: the two tickets side by side (Left/Right), then Everyone, each villager, then Weeds */
+    int WEED=3+I.nv, NROWS=WEED+1;
     if(*cur>NROWS-1) *cur=NROWS-1;
     if(*cur<2){
         if(left()) *cur=0; if(right()) *cur=1;
@@ -721,6 +732,9 @@ static void tab_island(void){
         if(v!=old) aden_turnip_set(sell,(u32)v);
     } else if(*cur==2){
         if(pr(B_A)){ for(int i=0;i<I.nv;i++) aden_villager_friend(I.vk[i],255); aden_snprintf(s_status,sizeof s_status,"Every villager is now your best friend"); }
+    } else if(*cur==WEED){
+        if(pr(B_A)){ int n=aden_weeds_clear();
+            aden_snprintf(s_status,sizeof s_status,n>0?"Removed %d weeds - enter a building to see it":n==0?"No weeds on your island":n==-1?"Island data not ready yet - try again in a moment":"Island map looks wrong - nothing was removed",n); }
     } else {
         int i=*cur-3;
         if(pr(B_A)){ aden_villager_friend(I.vk[i],255); aden_snprintf(s_status,sizeof s_status,"%s is now your best friend",I.vn[i]); }
@@ -729,7 +743,7 @@ static void tab_island(void){
     }
     /* read again after the edits above */
     for(int i=0;i<I.nv;i++){ const char* n; aden_villager_info(I.vk[i],&n,&I.vf[i],&I.vm[i]); }
-    I.sell=aden_turnip_sell(); I.buy=aden_turnip_buy(); aden_turnip_week(I.week);
+    I.sell=aden_turnip_sell(); I.buy=aden_turnip_buy(); aden_turnip_week(I.week); I.weeds=aden_weeds_count();
 
     /* tickets: both prices in one print at scale 2 (16 px a character, the tickets 17 apart) */
     at(0,0,C_DIM,"Sell, all week"); at(0,34,C_DIM,"Buy, Daisy Mae");
@@ -746,6 +760,8 @@ static void tab_island(void){
         if(I.vm[i]) at(7+i,16,C_WARN,"out");
         if(I.vf[i]<0) at_r(7+i,24,C_DIM,"-"); else at_r(7+i,24,C_TEXT,"%d",I.vf[i]);
     }
+    at(WEED_ROW,4,C_TEXT,"Weeds");
+    if(I.weeds<0) at_r(WEED_ROW,24,C_DIM,"-"); else at_r(WEED_ROW,24,C_TEXT,"%d",I.weeds);
     /* card */
     if(*cur<2){
         int sell=*cur==0;
@@ -766,6 +782,16 @@ static void tab_island(void){
         at(7,38,C_DIM,"%d villagers",I.nv);
         at(9,29,C_DIM,"Best friends"); at_r(9,63,C_TEXT,"%d / %d",bf,I.nv);
         at(13,30,C_WHITE,"A"); at(13,33,C_TEXT,"Best friend for all (255)");
+    } else if(*cur==WEED){
+        at(6,32,C_WHITE,"Wd");
+        big(334,222,1.6f,C_TEXT,"Weeds");
+        at(7,38,C_DIM,"Whole island");
+        at(9,29,C_DIM,"On the map"); if(I.weeds<0) at_r(9,63,C_DIM,"--"); else at_r(9,63,C_TEXT,"%d",I.weeds);
+        at(13,30,C_WHITE,"A"); at(13,33,C_TEXT,"Remove every weed");
+        at(16,31,C_WARN,"! Weeds already on screen");
+        at(17,31,C_WARN,"  stay until the next");
+        at(18,31,C_WARN,"  loading screen: enter and");
+        at(19,31,C_WARN,"  leave a building.");
     } else {
         int i=*cur-3, f=I.vf[i];
         at(6,32,C_TEXT,"%c%c",I.vn[i][0],I.vn[i][1]?I.vn[i][1]:' ');

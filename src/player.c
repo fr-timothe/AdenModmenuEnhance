@@ -676,3 +676,55 @@ void aden_villager_moving(int k,int on){
     for(int c=0;c<s_nmb;c++){ if(!heap_rw(vill(c,k),VILL_SIZE)) continue; u8* m=(u8*)(vill(c,k)+0x1267a); *m=(u8)((*m&~2)|(on?2:0)); }
     aden_log("villager %d moving out = %d", k, on);
 }
+
+/* ---- weeds ----
+   NHSE MainSaveOffsets30: the field item map is two layers of 288x192 tiles (9x6 acres of 32x32),
+   8 bytes a tile. A field object covers several tiles: the root tile holds its id, the others are
+   extension tiles (id 0xFFFD, root id at +4). Removing an object clears all its tiles to NONE.
+   Weed ids are NHSE FieldItemList entries of kind PltWeed*. */
+#define MAIN_FIELD   (0x110+0x22f3f0)
+#define FIELD_TILES  (288*192)
+#define FIELD_SIZE   (2*FIELD_TILES*8)
+static const u16 WEEDS[]={0xEA81,0xEA82,0xEA83,0xEA86,0xEA87,0xEA88,0xEB01,0xEB02,0xEB03,0xEB04,0xEB05,0xEB17,0xEB18,0xEB19,
+    0xEB28,0xEB30,0xEB31,0xEB32,0xEB33,0xEB34,0xEB35,0xEB36,0xEB37,0xEB38,0xEB39,0xEB3A,0xEB3B,0xEB3C,0xEC7F,0xEC80,0xEC81,
+    0xEC82,0xEC83,0xEC84,0xEC85,0xEC86,0xEC87,0xEC88,0xEC89,0xEC8A,0xEC8B,0xEC8C,0xEC8D,0xEC8E,0xEC8F,0xEC90,0xEC91,0xEC92,
+    0xEC93,0xED0F,0xED10,0xED11,0xED12,0xED13,0xED14,0xED15};
+static int is_weed(u16 id){
+    if(id<0xEA81 || id>0xED15) return 0;
+    for(unsigned i=0;i<sizeof WEEDS/sizeof WEEDS[0];i++) if(WEEDS[i]==id) return 1;
+    return 0;
+}
+/* the field must look like item tiles: an empty tile is NONE with nothing else set */
+static int field_ok(uptr F){
+    if(!heap_rw(F,FIELD_SIZE)) return 0;
+    int bad=0; const u64* t=(const u64*)F;
+    for(int i=0;i<2*FIELD_TILES;i++){ u16 id=(u16)t[i]; if(id==0xFFFE && t[i]!=0xFFFE && ++bad>16) return 0; if(id==0xFFFF) return 0; }
+    return 1;
+}
+/* weeds on the island (root tiles only), -1 if the island data is not ready */
+int aden_weeds_count(void){
+    if(!s_nmb) return -1;
+    uptr F=s_mb[0]+MAIN_FIELD; if(!heap_rw(F,FIELD_SIZE)) return -1;
+    int n=0; const u64* t=(const u64*)F;
+    for(int i=0;i<2*FIELD_TILES;i++) if(is_weed((u16)t[i])) n++;
+    return n;
+}
+/* removes every weed in every island copy; returns the weeds removed from the first copy,
+   -1 island data not ready, -2 the field looks wrong (nothing written) */
+int aden_weeds_clear(void){
+    if(!s_nmb) return -1;
+    for(int c=0;c<s_nmb;c++) if(!field_ok(s_mb[c]+MAIN_FIELD)){ aden_log("weeds: field copy %d looks wrong, not touching it", c); return -2; }
+    int removed=0;
+    for(int c=0;c<s_nmb;c++){
+        u64* t=(u64*)(s_mb[c]+MAIN_FIELD); int n=0;
+        for(int i=0;i<2*FIELD_TILES;i++){
+            u16 id=(u16)t[i];
+            int root=is_weed(id), ext= id==0xFFFD && is_weed((u16)(t[i]>>32));
+            if(root) n++;
+            if(root || ext) t[i]=0xFFFE;
+        }
+        if(c==0) removed=n;
+    }
+    aden_log("weeds: removed %d in %d copies", removed, s_nmb);
+    return removed;
+}
