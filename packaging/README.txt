@@ -25,13 +25,14 @@ CONTROLS (menu open)
   Up / Down        move
   B                close the menu
   Items:  arrows move in the grid, ZL/ZR item family, -/+ amount, Y search, X pockets or storage, A give
-          Items from DLC you do not own are not listed.
+          Items from DLC you do not own are not listed. Opening it also reads your island,
+          so a failed read shows up right away (X goes on without the island data).
   Player: Up/Down picks a row (resident, money, unlocks), Left/Right an entry in it.
           On money: ZL/ZR big step, X max, Y zero, A opens the digits (Left/Right pick a
           digit, Up/Down change it, A or B done). Minus searches your player data again.
           Limits: wallet 99,999 Bells, Nook Miles 9,999,999, bank 999,999,999, Poki 9,999,999.
-  Island: Up/Down picks a price or a villager. Prices: Left/Right +-10, ZL/ZR +-100,
-          X best natural price, Y zero. Villager: A best friend, Y reset, X moving out.
+  Island: Left/Right picks the sell or buy price, Down goes to the villagers. Prices: -/+ 10,
+          ZL/ZR 100, X best natural price, Y zero. Villager: A best friend, Y reset, X moving out.
   Mods:   arrows move between cards, ZL/ZR page, A on/off, Minus undoes every change
           since the game started, Y rescans the folder.
   About:  ZL/ZR changes page (Info, Controls, Icon check, Credits).

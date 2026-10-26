@@ -94,17 +94,18 @@ void gfx_rrect(float x,float y,float w,float h,float r,u32 rgba){
 
 /* ---- item icons: nvnCommandBufferDrawTexture on the same command buffer as the primitives ----
    Its region is in render-target pixels, so the menu space (1280x720, origin centre, y up) is
-   scaled to the target size read from the viewport. Which way the window origin and the source
-   units go is not known yet: mode bit 0 = upper-left origin, bit 1 = source in texels (128). */
-static float s_tw=1280, s_th=720; static int s_vp_done;
+   scaled to the target size. The viewport the draw info holds is the 1280x720 layout even when
+   docked, where the game renders 1920x1080 (beta.14 reset the viewport to 1280x720 there: the
+   rest of the frame went into the top-left two thirds, a black box over the screen), so the
+   size comes from the operation mode, read every frame since the console can be docked live.
+   Which way the window origin and the source units go is not known yet: mode bit 0 = upper-left
+   origin, bit 1 = source in texels (128). */
+static float s_tw, s_th=720;
 static void target_size(void){
-    if(s_vp_done) return; s_vp_done=1;
-    const float* v=*(const float**)(cur_info+0x40);
-    if(!v){ aden_log("icons: no viewport, using 1280x720"); return; }
-    aden_log("icons: viewport %p: %d %d %d %d %d %d", v, (int)v[0],(int)v[1],(int)v[2],(int)v[3],(int)v[4],(int)v[5]);
-    for(int i=0;i<5;i++){ float w=v[i]-(i>=2?v[i-2]:0), h=v[i+1]-(i>=2?v[i-1]:0);
-        if(w>=640 && w<=4096 && h>=360 && h<=2304 && w>h){ s_tw=w; s_th=h; break; } }
-    aden_log("icons: target %dx%d", (int)s_tw, (int)s_th);
+    int docked= nn_oe_GetOperationMode()==1;
+    float w= docked ? 1920 : 1280, h= docked ? 1080 : 720;
+    if(w!=s_tw) aden_log("icons: target %dx%d (%s)", (int)w, (int)h, docked?"docked":"handheld");
+    s_tw=w; s_th=h;
 }
 void gfx_texture(u64 handle,float x,float y,float w,float h,int mode){
     if(!cur_ok || !handle) return;

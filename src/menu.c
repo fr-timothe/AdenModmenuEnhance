@@ -306,10 +306,12 @@ static void step_row(int row,int i,int st){
     }
     put(row,1,st==ST_FAIL?C_WARN:C_DIM,"%s",d);
 }
-/* returns 1 when it drew the page (the caller skips its tab) */
+/* returns 1 when it drew the page (the caller skips its tab).
+   island: 0 player only, 1 player and island, 2 the same but X goes on without the island */
+static int s_isl_skip;
 static int loading_page(int island){
     int ps=g_player_state, is=g_island_state;
-    int pfail= ps==3, ifail= island && ps==2 && is==3;
+    int pfail= ps==3, ifail= island && ps==2 && is==3 && !(island==2 && s_isl_skip);
     int busy= !pfail && !ifail && (ps<2 || (island && is<2));
     if(!busy && !pfail && !ifail){
         if(!s_seen_search) return 0;
@@ -333,7 +335,9 @@ static int loading_page(int island){
         text(ROW0+15,C_TEXT,"Load your island (not the title screen),");
         text(ROW0+16,C_TEXT,"then press A to search again.");
         text(ROW0+18,C_DIM,"Details: sdmc/aden/log.txt");
-        if(pr(B_A)){ s_status[0]=0; if(pfail) aden_player_find(); else g_island_state=0; }
+        if(ifail && island==2) text(ROW0+20,C_DIM,"X: use Items without the island data");
+        if(ifail && island==2 && pr(B_X)){ s_isl_skip=1; s_press&=~(u64)B_X; }
+        if(pr(B_A)){ s_status[0]=0; if(pfail) aden_player_find(); else { g_island_state=0; s_isl_skip=0; } }
     }
     return 1;
 }
@@ -356,7 +360,9 @@ static void tab_items(void){
     if(!s_items_loaded) load_items();
     if(!s_match) refilter();
     if(g_player_state==0) aden_player_find();   /* spawning needs the player data */
-    if(loading_page(0)) return;
+    /* the island search starts here too, so a failed read shows up on the first tab */
+    if(g_player_state==2 && g_island_state==0) aden_island_find();
+    if(loading_page(2)) return;
     if(!s_nitems){ text(ROW0,C_WARN,"items.txt not found on SD card"); text(ROW0+1,C_DIM,"put it in sdmc/aden/items.txt"); return; }
     int* cur=&s_cur[TAB_ITEMS];
     if(*cur>s_nmatch-1) *cur= s_nmatch>0 ? s_nmatch-1 : 0;
@@ -649,6 +655,7 @@ static const u32 VCOL[8]={0x9DB0CCFF,0xD9B48AFF,0xE9A3C9FF,0xA9CDEBFF,0xF2A65AFF
 /* friendship level 1-6 from the 0-255 points, 0 if not met */
 static int flevel(int f){ return f<0?0 : f<25?1 : f<70?2 : f<100?3 : f<150?4 : f<200?5 : 6; }
 static struct { int nv, vk[10], vf[10], vm[10], vs[10]; const char* vn[10]; u32 sell, buy, week[12]; } I;
+static int s_itk;   /* the ticket Up goes back to from the list */
 static void paint_island(void){
     int cur=s_cur[TAB_ISLAND];
     for(int t=0;t<2;t++){
@@ -664,7 +671,7 @@ static void paint_island(void){
     for(int i=0;i<I.nv;i++) if(I.vm[i]) box(152,GY(7+i)-1,40,18,9,C_WARNBG);
     box(244,204,310,356,18,C_WHITE);
     if(cur<2){
-        for(int i=0;i<4;i++) box(262,GY(8+2*i)-3,56,22,11,C_HEADDK);
+        for(int i=0;i<4;i++) box(258,GY(8+2*i)-3,64,22,11,C_HEADDK);
         if(cur==0){
             for(int i=0;i<12;i++){ float h=I.week[i]*70.f/999; if(h<2) h=2; if(h>70) h=70; box(264+23*i,530-h,17,h,4,C_HEAD); }
             box(262,530,276,2,0,C_LINE);
@@ -690,12 +697,19 @@ static void tab_island(void){
     if(!aden_island_ready()){ text(ROW0+2,C_DIM,"Finding your island data..."); return; }
     I.nv=0;
     for(int k=0;k<10;k++) if(aden_villager_info(k,&I.vn[I.nv],&I.vf[I.nv],&I.vm[I.nv])){ I.vk[I.nv]=k; I.vs[I.nv]=aden_villager_species(k); I.nv++; }
+    /* rows: the two tickets side by side (Left/Right), then Everyone, then each villager */
     int NROWS=3+I.nv;
-    if(up()&&*cur>0)(*cur)--; if(down()&&*cur<NROWS-1)(*cur)++;
     if(*cur>NROWS-1) *cur=NROWS-1;
     if(*cur<2){
+        if(left()) *cur=0; if(right()) *cur=1;
+        if(down()){ s_itk=*cur; *cur=2; }
+    } else {
+        if(up()){ if(*cur==2) *cur=s_itk; else (*cur)--; }
+        else if(down() && *cur<NROWS-1) (*cur)++;
+    }
+    if(*cur<2){
         int sell=*cur==0; s64 old=sell?aden_turnip_sell():aden_turnip_buy(), v=old;
-        if(left()) v-=10; if(right()) v+=10; if(pr(B_ZL)) v-=100; if(pr(B_ZR)) v+=100;
+        if(pr(B_MINUS)) v-=10; if(pr(B_PLUS)) v+=10; if(pr(B_ZL)) v-=100; if(pr(B_ZR)) v+=100;
         if(pr(B_X)) v= sell?660:90; if(pr(B_Y)) v=0;
         if(v<0) v=0; if(v>999) v=999;
         if(v!=old) aden_turnip_set(sell,(u32)v);
@@ -731,10 +745,10 @@ static void tab_island(void){
         int sell=*cur==0;
         at(5,29,C_TEXT,sell?"Sell price":"Buy price");
         at(6,29,C_DIM,sell?"Every half-day, Mon to Sat":"Daisy Mae, Sunday morning");
-        static const char* const KEY[4]={"< >","ZL ZR","X","Y"}; static const int KC[4]={31,30,32,32};
+        static const char* const KEY[4]={"- +","ZL ZR","X","Y"}; static const int KC[4]={31,30,32,32};
         for(int k=0;k<4;k++) at(8+2*k,KC[k],C_WHITE,"%s",KEY[k]);
-        at(8,36,C_TEXT,"+-10"); at(10,36,C_TEXT,"+-100");
-        at(12,36,C_TEXT,sell?"Best natural (660)":"Cheapest natural (90)"); at(14,36,C_TEXT,"Zero");
+        at(8,38,C_TEXT,"10 down / up"); at(10,38,C_TEXT,"100 down / up");
+        at(12,38,C_TEXT,sell?"Best natural (660)":"Cheapest natural (90)"); at(14,38,C_TEXT,"Zero");
         if(sell){ at(16,29,C_DIM,"This week"); at(21,29,C_DIM,"Mon"); at_r(21,63,C_DIM,"Sat"); }
         else { at(16,29,C_DIM,"Daisy Mae sells turnips"); at(17,29,C_DIM,"on Sunday mornings."); }
     } else if(*cur==2){
@@ -759,8 +773,9 @@ static void tab_island(void){
         at(17,30,C_WHITE,"X"); at(17,33,C_TEXT,"Moving out: %s",I.vm[i]?"yes":"no");
         if(I.vm[i]){ at(19,31,C_WARN,"Moving out"); at(20,31,C_WARN,"Leaves after your next save"); }
     }
-    text(26,C_DIM,*cur<2?"Up/Down pick   Left/Right +-10   ZL/ZR +-100   X best   Y zero"
-                       :"Up/Down pick   A best friend   Y reset   X moving out");
+    if(*cur<2){ text(26,C_DIM,"Left/Right sell or buy   Down villagers");
+                text(27,C_DIM,"-/+ 10   ZL/ZR 100   X best   Y zero"); }
+    else text(26,C_DIM,"Up/Down pick   A best friend   Y reset   X moving out");
     s_status_row=23;
     s_paint=paint_island;
 }
@@ -884,13 +899,13 @@ static const u16 SHOVEL=0x0833; static const char SHOVEL_FAM='M';
 static u32 state_col(int st){ return st==2 ? C_OK : st==1 ? C_HEAD : st==3 ? C_WARN : C_OFF; }
 static void paint_about(void){
     box(16,108,150,440,18,C_WELL);
-    box(22,GY(2*s_apage)-5,138,30,15,C_WHITE);
+    box(24,GY(1+2*s_apage)-5,134,30,15,C_WHITE);
     if(s_apage==0){
-        box(184,184,366,96,16,C_WHITE);
-        dot(206,GY(4)+8,6,state_col(g_player_state));
-        dot(206,GY(5)+8,6,state_col(g_player_state==2?g_island_state:0));
-        dot(206,GY(6)+8,6,aden_icons_on()?C_OK:C_OFF);
-        dot(206,GY(7)+8,6,C_HEAD);
+        box(184,180,366,112,18,C_WHITE);
+        dot(210,GY(4)+8,6,state_col(g_player_state));
+        dot(210,GY(5)+8,6,state_col(g_player_state==2?g_island_state:0));
+        dot(210,GY(6)+8,6,aden_icons_on()?C_OK:C_OFF);
+        dot(210,GY(7)+8,6,C_HEAD);
     } else if(s_apage==1){
         /* a Switch pad from disks and rounded boxes; the chosen key gets a yellow halo */
         int k=s_akey;
@@ -920,21 +935,21 @@ static void paint_about(void){
 static void tab_about(void){
     if(pr(B_ZL)) s_apage=(s_apage+3)%4;
     if(pr(B_ZR)) s_apage=(s_apage+1)%4;
-    for(int i=0;i<4;i++) at(2*i,1,i==s_apage?C_HEADDK:C_TEXT,"%s",APAGE[i]);
-    at(19,1,C_DIM,"v%s",ADEN_VERSION); at(20,1,C_DIM,"ZL/ZR: page");
+    for(int i=0;i<4;i++) at(1+2*i,2,i==s_apage?C_HEADDK:C_TEXT,"%s",APAGE[i]);
+    at(18,2,C_DIM,"v%s",ADEN_VERSION); at(19,2,C_DIM,"ZL/ZR: page");
     const char* hint="ZL/ZR page   L/R tabs   B close";
     if(s_apage==0){
         big(198,120,1.6f,C_TEXT,"v%s",ADEN_VERSION);
         at(2,21,C_DIM,"for ACNH 3.0.2 / 3.0.3");
         int ps=g_player_state, is=g_island_state;
-        at(4,23,C_TEXT,"Player data");
-        if(ps==2){ int n=aden_player_count(); at(4,38,C_DIM,"found, %d player%s",n,n==1?"":"s"); }
-        else at(4,38,ps==3?C_WARN:C_DIM,"%s",ps==1?"searching":ps==3?"not found":"not searched yet");
-        at(5,23,C_TEXT,"Island");
-        at(5,38,ps==2&&is==3?C_WARN:C_DIM,"%s",ps!=2||is==0?"waiting":is==1?"searching":is==2?"found":"not found");
-        at(6,23,C_TEXT,"Item icons");
-        if(aden_icons_on()) at(6,38,C_DIM,"ON, variant %d",aden_icon_mode()+1); else at(6,38,C_DIM,"off");
-        at(7,23,C_TEXT,"Log file"); at(7,38,C_DIM,"sdmc:/aden/log.txt");
+        at(4,24,C_TEXT,"Player data");
+        if(ps==2){ int n=aden_player_count(); at(4,39,C_DIM,"found, %d player%s",n,n==1?"":"s"); }
+        else at(4,39,ps==3?C_WARN:C_DIM,"%s",ps==1?"searching":ps==3?"not found":"not searched yet");
+        at(5,24,C_TEXT,"Island");
+        at(5,39,ps==2&&is==3?C_WARN:C_DIM,"%s",ps!=2||is==0?"waiting":is==1?"searching":is==2?"found":"not found");
+        at(6,24,C_TEXT,"Item icons");
+        if(aden_icons_on()) at(6,39,C_DIM,"ON, variant %d",aden_icon_mode()+1); else at(6,39,C_DIM,"off");
+        at(7,24,C_TEXT,"Log file"); at(7,39,C_DIM,"sdmc:/aden/log.txt");
         at(9,21,C_HEADDK,"How to use");
         at(10,21,C_DIM,"Open it from the Nook Phone.");
         at(11,21,C_DIM,"B closes it. L/R changes tab.");

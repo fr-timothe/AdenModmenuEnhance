@@ -45,3 +45,5 @@ void* malloc(size_t); void free(void*);
 /* add-on content (DLC) the user owns: indices relative to the game's first add-on title id */
 int nn_aoc_CountAddOnContent(void)          __asm__("_ZN2nn3aoc17CountAddOnContentEv");
 int nn_aoc_ListAddOnContent(int*, int, int) __asm__("_ZN2nn3aoc16ListAddOnContentEPiii");
+/* 0 handheld, 1 docked (the game then renders 1920x1080 instead of 1280x720) */
+int nn_oe_GetOperationMode(void)            __asm__("_ZN2nn2oe16GetOperationModeEv");
