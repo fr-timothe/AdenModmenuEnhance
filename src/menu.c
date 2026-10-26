@@ -619,10 +619,7 @@ static void tab_player(void){
             d[m]=z[m]=0;
             big(dig_x(n,0)+12,350,2.0f,C_TEXT,"%s",d);
             if(lead) big(dig_x(n,0)+12,350,2.0f,C_DIM,"%s",z);
-            if(s_pedit){
-                at(14,1,C_DIM,"Left/Right pick a digit   Up/Down change it   A done");
-                at(15,1,C_DIM,"X max   Y zero");
-            } else {
+            if(!s_pedit){
                 at(14,1,C_DIM,"A edit digits   ZL/ZR +-%s   X max   Y zero",th(CUR_BIG[k]));
                 if(k==0) at(15,1,C_DIM,"More than 99,999 Bells only fits as Bell bags.");
                 if(k==3) at(15,1,C_DIM,"Poki is the Happy Home Paradise currency.");
@@ -639,11 +636,11 @@ static void tab_player(void){
         at(15,1,C_DIM,"Left/Right: who to edit (items you spawn go to them too)");
     } else if(s_punl<2){
         int rec= s_punl==0, k= rec ? P.rk : P.ek, t= rec ? P.rt : P.et;
-        at(10,1,C_TEXT,rec?"Learn every DIY recipe":"Learn every reaction"); at_r(10,62,C_DIM,"%d / %d",k,t);
+        at(10,1,C_TEXT,rec?"Learn every DIY recipe":"Learn every reaction");
         at(13,1,C_DIM,rec?"%d recipes to learn - new ones show up marked as new.":"%d reactions to learn.",t>k?t-k:0);
         at(14,1,C_DIM,rec?"A adds them all to your recipe book.":"A adds them all to your reaction list.");
     } else {
-        at(10,1,C_TEXT,"Fill pockets with Bell bags"); at_r(10,62,C_DIM,"%d free slots",P.free);
+        at(10,1,C_TEXT,"Fill pockets with Bell bags");
         at(14,1,C_DIM,"A puts a 99,000 Bell bag in each free slot.");
         at(15,1,C_TEXT,"%d bags = %s Bells",P.free,th((u32)P.free*99000u));
     }
@@ -695,7 +692,7 @@ static void paint_island(void){
         box(262,366,276,2,0,C_LINE);
         int nk= i<0 ? 1 : 3;
         for(int k=0;k<nk;k++) dot(274,GY(13+2*k)+8,12,C_HEADDK);
-        if(i>=0 && I.vm[i]) box(262,488,276,56,14,C_WARNBG);
+        if(i>=0 && I.vm[i]) box(262,488,276,36,14,C_WARNBG);
     }
 }
 static void tab_island(void){
@@ -759,15 +756,15 @@ static void tab_island(void){
         at(8,38,C_TEXT,"10 down / up"); at(10,38,C_TEXT,"100 down / up");
         at(12,38,C_TEXT,sell?"Best natural (660)":"Cheapest natural (90)"); at(14,38,C_TEXT,"Zero");
         if(sell){ at(16,29,C_DIM,"This week"); at(21,29,C_DIM,"Mon"); at_r(21,63,C_DIM,"Sat"); }
-        else { at(16,29,C_DIM,"Daisy Mae sells turnips"); at(17,29,C_DIM,"on Sunday mornings."); }
+        else { int pf=(int)I.sell-(int)I.buy;
+               at(16,29,C_DIM,"Profit per turnip"); at_r(16,63,pf<0?C_WARN:C_TEXT,"%s%d",pf>0?"+":"",pf);
+               at(17,29,C_DIM,"at this week's sell price"); }
     } else if(*cur==2){
         int bf=0; for(int i=0;i<I.nv;i++) if(I.vf[i]==255) bf++;
         at(6,32,C_WHITE,"All");
         big(334,222,1.6f,C_TEXT,"Everyone");
         at(7,38,C_DIM,"%d villagers",I.nv);
         at(9,29,C_DIM,"Best friends"); at_r(9,63,C_TEXT,"%d / %d",bf,I.nv);
-        at(10,29,C_DIM,"A sets every villager's friendship");
-        at(11,29,C_DIM,"to the max (255).");
         at(13,30,C_WHITE,"A"); at(13,33,C_TEXT,"Best friend for all (255)");
     } else {
         int i=*cur-3, f=I.vf[i];
@@ -780,11 +777,10 @@ static void tab_island(void){
         at(13,30,C_WHITE,"A"); at(13,33,C_TEXT,"Best friend (255)");
         at(15,30,C_WHITE,"Y"); at(15,33,C_TEXT,"Reset friendship (25)");
         at(17,30,C_WHITE,"X"); at(17,33,C_TEXT,"Moving out: %s",I.vm[i]?"yes":"no");
-        if(I.vm[i]){ at(19,31,C_WARN,"Moving out"); at(20,31,C_WARN,"Leaves after your next save"); }
+        if(I.vm[i]) at(19,31,C_WARN,"Leaves after your next save");
     }
-    if(*cur<2){ text(26,C_DIM,"Left/Right sell or buy   Down villagers");
-                text(27,C_DIM,"-/+ 10   ZL/ZR 100   X best   Y zero"); }
-    else text(26,C_DIM,"Up/Down pick   A best friend   Y reset   X moving out");
+    text(26,C_DIM,*cur<2?"Left/Right sell or buy   Down villagers   B close"
+                         :"Up/Down pick   Up from the top: prices   B close");
     s_status_row=23;
     s_paint=paint_island;
 }
@@ -877,7 +873,6 @@ static void tab_mods(void){
         at(13,26,C_TEXT,"No mods yet");
         at(15,18,C_DIM,"Copy a romfs mod folder into");
         at(16,18,C_TEXT,"sdmc/aden/mods/<name>/romfs");
-        at(18,21,C_DIM,"Y rescans the folder.");
     }
     int pg= s_msel<0 ? 0 : s_msel/MPAGE;
     for(int i=0;i<MPAGE && pg*MPAGE+i<n;i++){
@@ -906,17 +901,15 @@ static void paint_about(void){
     box(16,108,150,440,18,C_WELL);
     box(24,GY(1+2*s_apage)-5,134,30,15,C_WHITE);
     if(s_apage==0){
-        box(184,180,366,112,18,C_WHITE);
+        box(184,180,366,92,18,C_WHITE);
         dot(210,GY(4)+8,6,state_col(g_player_state));
         dot(210,GY(5)+8,6,state_col(g_player_state==2?g_island_state:0));
         dot(210,GY(6)+8,6,aden_icons_on()?C_OK:C_OFF);
-        dot(210,GY(7)+8,6,C_HEAD);
     }
 }
 static void tab_about(void){
     if(pr(B_ZL)||pr(B_ZR)||up()||down()) s_apage^=1;
     for(int i=0;i<2;i++) at(1+2*i,2,i==s_apage?C_HEADDK:C_TEXT,"%s",APAGE[i]);
-    at(18,2,C_DIM,"v%s",ADEN_VERSION); at(19,2,C_DIM,"ZL/ZR: page");
     const char* hint="ZL/ZR page   L/R tabs   B close";
     if(s_apage==0){
         big(198,120,1.6f,C_TEXT,"v%s",ADEN_VERSION);
@@ -928,23 +921,20 @@ static void tab_about(void){
         at(5,24,C_TEXT,"Island");
         at(5,39,ps==2&&is==3?C_WARN:C_DIM,"%s",ps!=2||is==0?"waiting":is==1?"searching":is==2?"found":"not found");
         at(6,24,C_TEXT,"Item icons"); at(6,39,C_DIM,"%s",on?"ON":"off");
-        at(7,24,C_TEXT,"Log file"); at(7,39,C_DIM,"sdmc:/aden/log.txt");
         at(9,21,C_HEADDK,"How to use");
         at(10,21,C_DIM,"Open it from the Nook Phone.");
-        at(11,21,C_DIM,"B closes it. L/R changes tab.");
-        at(12,21,C_DIM,"Your character is paused while it is open.");
-        at(14,21,C_HEADDK,"Item icons");
-        at(15,21,C_DIM,"The Items grid shows the game's icons.");
-        at(16,21,C_DIM,"If they crash the game, they turn off");
-        at(17,21,C_DIM,"by themselves at the next start.");
+        at(11,21,C_DIM,"Your character is paused while it is open.");
+        at(13,21,C_HEADDK,"Item icons");
+        at(14,21,C_DIM,"The Items grid shows the game's icons.");
+        at(15,21,C_DIM,"If they crash the game, they turn off");
+        at(16,21,C_DIM,"by themselves at the next start.");
         if(pr(B_A)){ if(on) aden_icons_disable(); else aden_icons_enable(); }
-        hint= on ? "A icons off   ZL/ZR page   B close" : "A icons on   ZL/ZR page   B close";
+        hint= on ? "A icons off   ZL/ZR page   L/R tabs   B close" : "A icons on   ZL/ZR page   L/R tabs   B close";
     } else {
-        at(0,21,C_TEXT,"Aden Modmenu"); at(1,21,C_DIM,"v%s for ACNH 3.0.2 / 3.0.3",ADEN_VERSION);
-        at(3,21,C_DIM,"Built by"); at(4,21,C_TEXT,"AdenDev");
-        at(6,21,C_DIM,"Item names and data"); at(7,21,C_TEXT,"NHSE by kwsch");
-        at(9,21,C_DIM,"License"); at(10,21,C_TEXT,"GPL-3.0");
-        at(12,21,C_DIM,"Found a bug? Send this file:"); at(13,21,C_TEXT,"sdmc:/aden/log.txt");
+        at(1,21,C_DIM,"Built by"); at(2,21,C_TEXT,"AdenDev");
+        at(4,21,C_DIM,"Item names and data"); at(5,21,C_TEXT,"NHSE by kwsch");
+        at(7,21,C_DIM,"License"); at(8,21,C_TEXT,"GPL-3.0");
+        at(10,21,C_DIM,"Found a bug? Send this file:"); at(11,21,C_TEXT,"sdmc/aden/log.txt");
     }
     text(26,C_DIM,hint);
     s_paint=paint_about;
