@@ -644,7 +644,8 @@ static void tab_items(void){
         if(pr(B_B)||pr(B_PLUS)){ s_typing=0; s_press&=~(u64)(B_B|B_PLUS); }  /* B only leaves the keyboard */
         return;
     }
-    if(pr(B_A) && s_nmatch){ sheet_open(s_match[*cur]); s_press&=~(u64)B_A; }
+    /* A on a tile opens the sheet; once it is open, A is the sheet's (give) */
+    if(!s_sheet && pr(B_A) && s_nmatch){ sheet_open(s_match[*cur]); s_press&=~(u64)B_A; }
     if(s_sheet){ sheet(); return; }
     search_line();
     /* move in the grid; going past the first or last row turns the page */
