@@ -1041,7 +1041,7 @@ void aden_menu_draw(void){
     }
     if(s_status[0]) put(s_status_row,0,C_WARN,"%s",s_status);
     draw_chrome();
-    gfx_text(TX,PY0-18,1.6f,C_TITLE,"Aden Modmenu");
+    gfx_text(TX,PY0-18,1.6f,C_TITLE,"Aden Modmenu Enhance");
     draw_tabs_text();
     flush(TX,CY);
     flush_big();

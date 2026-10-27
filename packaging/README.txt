@@ -1,4 +1,4 @@
-Aden Modmenu v@VERSION@ - Animal Crossing: New Horizons (Eden emulator)
+Aden Modmenu Enhance v@VERSION@ - Animal Crossing: New Horizons (Eden emulator)
 =================================================================
 
 GAME VERSION

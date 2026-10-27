@@ -1,7 +1,7 @@
 <div align="center">
-  <img src="assets/A_logo_1024.png" height="180" alt="Aden Modmenu logo">
-<h1>Aden Modmenu</h1>
-<p><strong>An in-game mod menu for Animal Crossing: New Horizons, opened from the Nook Phone.</strong>
+  <img src="assets/A_logo_1024.png" height="180" alt="Aden Modmenu Enhance logo">
+<h1>Aden Modmenu Enhance</h1>
+<p><strong>The enhanced fork of Aden Modmenu: an in-game mod menu for Animal Crossing: New Horizons, opened from the Nook Phone, with the game's own item icons.</strong>
 <br>
 <strong>Runs on <code>Eden</code> · Built for ACNH <code>3.0.2</code> · <code>3.0.3</code> in beta</strong></p>
 <br>
@@ -14,6 +14,7 @@
 <br>
 <p><strong>Quick links</strong></p>
 <p>
+<a href="#what-enhance-adds"><img src="https://img.shields.io/badge/What_Enhance_adds-000000?style=for-the-badge" alt=""></a>
 <a href="#screenshots"><img src="https://img.shields.io/badge/Screenshots-000000?style=for-the-badge" alt=""></a>
 <a href="#features"><img src="https://img.shields.io/badge/Features-000000?style=for-the-badge" alt=""></a>
 <a href="#controls"><img src="https://img.shields.io/badge/Controls-000000?style=for-the-badge" alt=""></a>
@@ -27,7 +28,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/showcase/aden-demo.webp" alt="Animated tour of the Aden Modmenu tabs" width="100%">
+  <img src="assets/showcase/aden-demo.webp" alt="Animated tour of the Aden Modmenu Enhance tabs" width="100%">
 </p>
 <p align="center">
   <small>🎥 <a href="assets/showcase/aden-presentation.mp4">Download the 1080p presentation video (MP4)</a></small>
@@ -36,9 +37,21 @@
 
 ## Introduction
 
-Aden Modmenu adds an app to the Nook Phone. Tap it and a menu opens over the game: spawn any item, edit your Bells and Nook Miles, set turnip prices, make every villager your best friend, and turn romfs mods on and off. Everything runs inside the game, with no PC tool and no save editor round trip.
+Aden Modmenu Enhance adds an app to the Nook Phone. Tap it and a menu opens over the game: spawn any item, edit your Bells and Nook Miles, set turnip prices, make every villager your best friend, and turn romfs mods on and off. Everything runs inside the game, with no PC tool and no save editor round trip.
 
 The mod edits the live save data in memory, using the save layout documented by [NHSE](https://github.com/kwsch/NHSE). It finds its hook points by fingerprint at start-up, so it is not tied to one exact game build: if it cannot find them, it switches itself off and the game runs normally.
+
+## What Enhance adds
+
+Aden Modmenu Enhance starts from [AdenDev's Aden Modmenu](https://github.com/Dev-gu/AdenModmenu) v0.5.3 and adds:
+
+- `Item icons`: the Items tab is a pocket-style grid that shows each item with the game's own icon, loaded only for the page on screen
+- `Family filter and owned DLC only` in the Items tab
+- `Redesigned tabs`: Player, Island, Mods and About rebuilt as cards, with the same look as the Nook Phone apps
+- `Built-in Stack 99` switch, and `Remove every weed` on the island
+- `Loading page` that shows each step of the player and island searches
+- `Sturdier memory search`: upgraded pockets, every save copy kept in sync, searches that never block the game
+- `Release zip` you drag into the Eden folder, built and published by GitHub Actions
 
 ## Screenshots
 
@@ -73,7 +86,7 @@ The mod edits the live save data in memory, using the save layout documented by 
   <summary>Items</summary>
 
 - `Search every item` (10,000+ names from `sdmc/aden/items.txt`) with an on-screen keyboard
-- `Pocket-style grid` of 5 x 4 tiles a page, with the game's own item icons (game 3.0.3, test)
+- `The game's own item icons` in a pocket-style grid of 5 x 4 tiles a page (game 3.0.3; A on the About tab's Info page turns them off)
 - `Family filter` on ZL/ZR: Furniture, Clothing, Nature, Materials, Other
 - `Spawn into pockets or home storage`, up to 40 full stacks of a stackable item
 - `Owned DLC only`: Happy Home Paradise, Pocket Camp and Switch Online items are listed only if you own them
