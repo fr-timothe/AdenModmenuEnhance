@@ -136,7 +136,7 @@ Aden Modmenu Enhance starts from [AdenDev's Aden Modmenu](https://github.com/Dev
 |---|---|
 | Everywhere | `L` / `R` switch tab, `B` close the menu |
 | Items | D-pad move, `ZL`/`ZR` family, `Y` search, `A` open the give sheet |
-| Give sheet | D-pad picks a colour or variant tile, `ZL`/`ZR` body or pattern; `Down` to the amount (`Left`/`Right` 1, `ZL`/`ZR` 10) and the destination (`Left`/`Right`); anywhere `-`/`+` 1, `X` max, `Y` back to 1, `A` give, `B` back to the grid |
+| Give sheet | D-pad picks a colour or variant tile, `ZL`/`ZR` body or pattern; `Down` to the amount (`Left`/`Right` 1, `ZL`/`ZR` 10) and the destination (`Left`/`Right`); anywhere `-`/`+` 1, `X` max, `Y` back to 1, `A` give, `B` back to the grid; `L`/`R` change tab and the sheet stays open |
 | Player | `Up`/`Down` zone, `Left`/`Right` entry, `A` digits or learn, `ZL`/`ZR` big step, `X` max, `Y` zero, `-` search again |
 | Island | `Left`/`Right` sell or buy, `-`/`+` 10, `ZL`/`ZR` 100, `X` best price, `Y` zero; on a villager `A` best friend, `Y` reset, `X` moving out; on Weeds `A` remove them all |
 | Mods | D-pad move, `ZL`/`ZR` page, `A` on/off, `-` undo, `Y` rescan |

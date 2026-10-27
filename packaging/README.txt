@@ -28,7 +28,7 @@ CONTROLS (menu open)
           Give sheet: the colours or variants are a grid of tiles; the D-pad picks one,
           ZL/ZR shows the body or the pattern. Down goes to the amount (Left/Right 1, ZL/ZR 10)
           and to pockets or storage (Left/Right). Anywhere: -/+ 1, X max, Y back to 1,
-          A gives, B goes back.
+          A gives, B goes back. L/R changes tab; back on Items, the sheet is still open.
           The amount is back to 1 each time the sheet opens. Three dots on a tile: it has
           colours or variants to choose from.
           Items from DLC you do not own are not listed. Opening it also reads your island,

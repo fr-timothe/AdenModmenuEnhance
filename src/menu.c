@@ -601,10 +601,10 @@ static void sheet(void){
     at(SH_GIVE,2,C_WHITE,"A  Give %d to %s",q,s_to_storage?"home storage":who[0]?clip(who,12):"pockets");
     at_r(SH_GIVE,62,C_WHITE,"%d slot%s",slots,slots==1?"":"s");
     z=s_sh_row;
-    text(26,C_DIM, z==SZ_QTY ? "Left/Right 1  ZL/ZR 10  X max  Y one  A give  B back"
-                 : z==SZ_DEST ? "Left/Right pockets or storage  A give  B back"
-                 : SH.nset>1 ? "D-pad choose  ZL/ZR other part  A give  B back"
-                 : "D-pad choose  Down amount  A give  B back");
+    text(26,C_DIM, z==SZ_QTY ? "Left/Right 1  ZL/ZR 10  X max  Y one  A give  B back  L/R tabs"
+                 : z==SZ_DEST ? "Left/Right pockets or storage  A give  B back  L/R tabs"
+                 : SH.nset>1 ? "D-pad choose  ZL/ZR other part  A give  B back  L/R tabs"
+                 : "D-pad choose  Down amount  A give  B back  L/R tabs");
     s_status_row=SH_GIVE+2;
     s_paint=paint_sheet;
 }
@@ -1233,7 +1233,8 @@ void aden_menu_draw(void){
     poll();
     /* ignore input until every button from the phone tap has been released */
     if(!s_armed){ if(s_now==0) s_armed=1; s_press=0; }
-    if(!s_typing && !s_pedit && !(s_sheet && s_tab==TAB_ITEMS)){
+    /* the give sheet stays open across tab changes: back on Items, the same item is still shown */
+    if(!s_typing && !s_pedit){
         if(pr(B_L)) s_tab=(s_tab+NTABS-1)%NTABS;
         if(pr(B_R)) s_tab=(s_tab+1)%NTABS;
     }
