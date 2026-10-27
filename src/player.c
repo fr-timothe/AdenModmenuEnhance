@@ -279,8 +279,9 @@ void aden_wallet_set(u32 v){
     for(int i=0;i<s_ncopies;i++) enc_set((EncInt*)(s_copy[i]+0xB8),v);
     aden_log("wallet set to %u in %d copies", v, s_ncopies);
 }
-/* >= 0 items placed, -1 player data not ready, -2 pockets look wrong (nothing written) */
-int aden_pocket_add(u16 id, int qty, int stack){
+/* >= 0 items placed, -1 player data not ready, -2 pockets look wrong (nothing written).
+   var: the count field of an unstackable item (remake variant: body + 32 * fabric) */
+int aden_pocket_add(u16 id, int qty, int stack, u16 var){
     if(!aden_player_ready()) return -1;   /* also checks every copy is still mapped and valid */
     uptr P=s_copy[0]; u32 size=pocket_size(P);
     /* a copy may still hold the size from before an upgrade: never fill a slot locked in any copy */
@@ -299,13 +300,13 @@ int aden_pocket_add(u16 id, int qty, int stack){
         int n = stack>1 ? (qty>stack?stack:qty) : 1;
         for(int c=0;c<s_ncopies;c++){
             uptr Q=s_copy[c]; uptr s= slot<20 ? Q+slot*8 : Q-0xB8+(slot-20)*8;
-            *(u32*)(s+4) = stack>1 ? (u32)(n-1) : 0;
+            *(u32*)(s+4) = stack>1 ? (u32)(n-1) : var;
             *(u16*)(s+2) = 0;
             *(u16*)s = id;
         }
         qty-=n; placed+=n;
     }
-    aden_log("pocket add %04X: placed %d", id, placed);
+    aden_log("pocket add %04X (variant %u): placed %d", id, var, placed);
     return placed;
 }
 /* pocket slots the upgrades unlocked (smallest of all copies), -1 not ready */
@@ -565,8 +566,8 @@ static int chest_cap(void){
     }
     return cap;
 }
-/* >= 0 items placed, -1 player data not ready, -2 storage looks wrong (nothing written) */
-int aden_storage_add(u16 id,int qty,int stack){
+/* >= 0 items placed, -1 player data not ready, -2 storage looks wrong (nothing written); var as in aden_pocket_add */
+int aden_storage_add(u16 id,int qty,int stack,u16 var){
     int cap=chest_cap(), placed=0, slot=0;
     if(cap<0) return cap;
     while(qty>0){
@@ -575,11 +576,11 @@ int aden_storage_add(u16 id,int qty,int stack){
         int n = stack>1 ? (qty>stack?stack:qty) : 1;
         for(int c=0;c<s_npb;c++){
             uptr s=s_pb[c]+PERS_CHEST+slot*8;
-            *(u32*)(s+4) = stack>1 ? (u32)(n-1) : 0; *(u16*)(s+2)=0; *(u16*)s=id;
+            *(u32*)(s+4) = stack>1 ? (u32)(n-1) : var; *(u16*)(s+2)=0; *(u16*)s=id;
         }
         qty-=n; placed+=n; slot++;
     }
-    aden_log("storage add %04X: placed %d (%d usable slots)", id, placed, cap);
+    aden_log("storage add %04X (variant %u): placed %d (%d usable slots)", id, var, placed, cap);
     return placed;
 }
 int aden_storage_free(void){
@@ -629,8 +630,8 @@ int aden_split_stacks(int (*maxof)(u16), int* need, int* have){
             int nc= pass ? s_npb : s_ncopies;
             for(int c=0;c<nc;c++){ uptr s= pass ? s_pb[c]+PERS_CHEST+i*8 : pslot(c,i);
                 if(*(u16*)s==id) *(u16*)(s+4)=(u16)(m-1); }
-            int put=aden_pocket_add(id,x,m); if(put<0) put=0;
-            if(put<x){ int r=aden_storage_add(id,x-put,m); if(r>0) put+=r; }
+            int put=aden_pocket_add(id,x,m,0); if(put<0) put=0;
+            if(put<x){ int r=aden_storage_add(id,x-put,m,0); if(r>0) put+=r; }
             aden_log("stack split %04X: %d over max %d, %d placed", id, x, m, put);
             n++;
         }

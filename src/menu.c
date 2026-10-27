@@ -15,14 +15,14 @@ void aden_player_names(char*,char*,int);
 int aden_player_count(void); int aden_player_active(void); const char* aden_player_name(int); void aden_player_select(int);
 int aden_recipes_learn_all(void); int aden_recipes_known(void); int aden_recipes_total(void);
 int aden_reactions_learn_all(void); int aden_reactions_known(void);
-int aden_storage_add(u16,int,int); int aden_storage_free(void);
+int aden_storage_add(u16,int,int,u16); int aden_storage_free(void);
 extern volatile int g_island_state; void aden_island_find(void); int aden_island_ready(void);
 u32 aden_turnip_sell(void); u32 aden_turnip_buy(void); void aden_turnip_set(int,u32);
 int aden_villager_info(int,const char**,int*,int*); void aden_villager_friend(int,u8); void aden_villager_moving(int,int);
 int aden_villager_species(int); int aden_turnip_week(u32*);
 int aden_weeds_count(void); int aden_weeds_clear(void);
 int aden_pocket_free(void); int aden_pocket_slots(void); int aden_reactions_total(void);
-u32 aden_wallet_get(void); void aden_wallet_set(u32); int aden_pocket_add(u16 id,int qty,int stack);
+u32 aden_wallet_get(void); void aden_wallet_set(u32); int aden_pocket_add(u16 id,int qty,int stack,u16 var);
 extern volatile int g_player_state;
 extern volatile int g_menu_open, g_input_hold;
 
@@ -134,8 +134,11 @@ static int up(void){ return pr(B_UP|S_UP); } static int down(void){ return pr(B_
 static int left(void){ return pr(B_LEFT|S_LEFT); } static int right(void){ return pr(B_RIGHT|S_RIGHT); }
 
 /* ---------- item database (sd:/aden/items.txt) ----------
-   columns: hex id, category, name, max stack, family (F C N M O), dlc (- H P S); the last three are optional */
-typedef struct { u16 id; u16 stack; const char* cat; const char* name; char fam, dlc; } Item;
+   columns: hex id, category, name, max stack, family (F C N M O), dlc (- H P S), group, body, fabric;
+   all after the name are optional. group: the other colours of a clothing item follow its first
+   colour and give its id here; they share one grid tile (sub set, the first colour counts them in
+   ncol). body, fabric: remake variants "<part>|<variant 0>|<variant 1>|..." */
+typedef struct { const char* cat; const char* name; const char* body; const char* fab; u16 id, stack; char fam, dlc; u8 sub, ncol; } Item;
 static Item* s_items; static int s_nitems; static int s_items_loaded; static char* s_itembuf;
 /* add-on content the player owns: Happy Home Paradise (index 1000), Pocket Camp ticket (300), Switch Online items (301) */
 static int s_own_h, s_own_p, s_own_s;
@@ -146,6 +149,7 @@ static void check_dlc(void){
     aden_log("add-on content: %d owned (Happy Home Paradise %d, Pocket Camp %d, Switch Online items %d)", n, s_own_h, s_own_p, s_own_s);
 }
 static int dlc_ok(char d){ return d=='H' ? s_own_h : d=='P' ? s_own_p : d=='S' ? s_own_s : 1; }
+static u32 hexv(const char* h){ u32 v=0; for(;*h;h++){ v<<=4; v|= (*h<='9')?*h-'0':((*h|32)-'a'+10); } return v; }
 static void load_items(void){
     s_items_loaded=1;
     check_dlc();
@@ -155,20 +159,25 @@ static void load_items(void){
     nn_fs_ReadFile(f,0,s_itembuf,sz); nn_fs_CloseFile(f); s_itembuf[sz]=0;
     int lines=0, hidden=0; for(s64 i=0;i<sz;i++) if(s_itembuf[i]=='\n') lines++;
     s_items=malloc(sizeof(Item)*(lines+1));
-    char* p=s_itembuf;
+    char* p=s_itembuf; int lead=-1;
     while(*p){
         char* nl=p; while(*nl && *nl!='\n') nl++;
         char* line=p; p=*nl?nl+1:nl; *nl=0;
         if(nl>line && nl[-1]=='\r') nl[-1]=0;   /* CRLF files */
         if(line[0]=='#'||!line[0]) continue;
-        char* fl[6]; int nf=0; char* q=line;
-        while(nf<6){ fl[nf++]=q; while(*q && *q!='\t') q++; if(!*q) break; *q++=0; }
+        char* fl[9]; int nf=0; char* q=line;
+        while(nf<9){ fl[nf++]=q; while(*q && *q!='\t') q++; if(!*q) break; *q++=0; }
         if(nf<3) continue;
         int st=1; if(nf>3){ st=0; for(char* d=fl[3];*d>='0'&&*d<='9';d++) st=st*10+(*d-'0'); if(st<1) st=1; }
         char fam= nf>4 && fl[4][0] ? fl[4][0] : 'O', dl= nf>5 && fl[5][0] ? fl[5][0] : '-';
         if(!dlc_ok(dl)){ hidden++; continue; }   /* items from DLC the player does not own are never listed */
-        u32 id=0; for(char* h=line;*h;h++){ id<<=4; id|= (*h<='9')?*h-'0':((*h|32)-'a'+10); }
-        s_items[s_nitems++]=(Item){(u16)id,(u16)st,fl[1],fl[2],fam,dl};
+        u32 id=hexv(line);
+        /* another colour of the item before it (if the first colour is hidden, this one stands alone) */
+        int sub= nf>6 && fl[6][0] && fl[6][0]!='-' && lead>=0 && s_items[lead].id==hexv(fl[6]) && s_items[lead].ncol<255;
+        if(sub) s_items[lead].ncol++; else lead=s_nitems;
+        const char* body= nf>7 && fl[7][0] && st==1 ? fl[7] : 0;
+        const char* fab = nf>8 && fl[8][0] && st==1 ? fl[8] : 0;
+        s_items[s_nitems++]=(Item){fl[1],fl[2],body,fab,(u16)id,(u16)st,fam,dl,(u8)sub,1};
     }
     aden_log("loaded %d items, %d hidden (DLC not owned)", s_nitems, hidden);
 }
@@ -194,10 +203,28 @@ static const char* FAMN[NFAM]={"All","Furniture","Clothing","Nature","Materials"
 static const u32   FAMCOL[NFAM]={0xA39380FF,0xE0A24AFF,0xE07A9BFF,0x7DBF5AFF,0x9C7A55FF,0xA39380FF};
 static int s_fam;
 static int fam_idx(char c){ for(int i=1;i<NFAM;i++) if(FAMC[i]==c) return i; return NFAM-1; }
+/* one entry per grid tile: an item, or the first colour of a clothing item when any colour matches */
 static void refilter(void){
     if(!s_match) s_match=malloc(sizeof(int)*(s_nitems+1));
     s_nmatch=0;
-    for(int i=0;i<s_nitems;i++) if((!s_fam || s_items[i].fam==FAMC[s_fam]) && contains(s_items[i].name,s_query)) s_match[s_nmatch++]=i;
+    for(int i=0;i<s_nitems;i++){
+        Item* it=&s_items[i]; if(it->sub || (s_fam && it->fam!=FAMC[s_fam])) continue;
+        int hit=0; for(int k=0;k<it->ncol && !hit;k++) hit=contains(it[k].name,s_query);
+        if(hit) s_match[s_nmatch++]=i;
+    }
+}
+/* length of a clothing item's name without its colour ("tee (Blue)" -> 3); other items: the whole name */
+static int base_len(const Item* it){
+    int n=(int)strlen(it->name);
+    if((it->ncol>1 || it->sub) && it->name[n-1]==')') for(int i=n-2;i>0;i--) if(it->name[i]==' ' && it->name[i+1]=='(') return i;
+    return n;
+}
+/* remake variants "<part>|<v0>|<v1>|...": how many there are, and field k (0 the part, k+1 variant k) */
+static int vcount(const char* s){ int n=0; if(s) for(;*s;s++) n+= *s=='|'; return n; }
+static void vname(const char* s,int k,char* o,int cap){
+    int f=0, j=0;
+    for(;s && *s && f<=k;s++){ if(*s=='|'){ f++; continue; } if(f==k && j<cap-1) o[j++]=*s; }
+    o[j]=0;
 }
 
 /* ---------- mods: folders in sd:/aden/mods, on/off kept in sd:/aden/mods_on.txt ---------- */
@@ -243,6 +270,8 @@ enum { TAB_ITEMS, TAB_PLAYER, TAB_ISLAND, TAB_MODS, TAB_ABOUT, NTABS };
 static const char* TABNAME[NTABS]={"Items","Player","Island","Mods","About"};
 static int s_tab, s_cur[NTABS];
 static int s_qty=1; static int s_to_storage;
+/* give sheet: A on a grid tile opens it; the amount starts at 1 each time it opens */
+static int s_sheet, s_sh_item, s_sh_col, s_sh_body, s_sh_fab, s_sh_row;
 static int s_typing; static int s_kx, s_ky;
 static const char* KEYS[4]={"ABCDEFGHIJ","KLMNOPQRST","UVWXYZ -'.","0123456789"};
 static char s_status[96];
@@ -257,18 +286,18 @@ static int s_was_open, s_armed;
 #define GROWS 4
 #define GPAGE (GCOLS*GROWS)
 #define GLINE 11                   /* label characters per line (tile width / 8) */
-static int s_grid_on, s_grid_n, s_grid_sel, s_grid_fam[GPAGE];
+static int s_grid_on, s_grid_n, s_grid_sel, s_grid_fam[GPAGE], s_grid_nv[GPAGE];
 static u16 s_grid_id[GPAGE]; static char s_grid_fc[GPAGE];
-void aden_icons_want(int n,const u16* ids,const char* fams); int aden_icon_draw(u16 id,char fam,float x,float y,float w,float h,int mode);
+void aden_icons_want(int n,const u16* ids,const char* fams,const u16* vars); int aden_icon_draw(u16 id,char fam,u16 var,float x,float y,float w,float h,int mode);
 int aden_icons_on(void); int aden_icon_mode(void); void aden_icon_mode_set(int); void aden_icons_enable(void); void aden_icons_disable(void);
-int aden_icon_ready(u16 id,char fam);
+int aden_icon_ready(u16 id,char fam,u16 var);
 /* Icons are drawn last, after every box and text of the frame: their shader program replaces
    the one the boxes use. icon_at queues the icon and says if it will be drawn. */
-typedef struct { u16 id; char fam; s8 mode; float x,y,w,h; } IconQ;
+typedef struct { u16 id, var; char fam; s8 mode; float x,y,w,h; } IconQ;
 static IconQ s_iq[24]; static int s_niq;
-static int icon_at(u16 id,char fam,float x,float y,float w,float h,int mode){
-    if(s_niq>=24 || !aden_icon_ready(id,fam)) return 0;
-    s_iq[s_niq++]=(IconQ){id,fam,(s8)mode,x,y,w,h}; return 1;
+static int icon_at(u16 id,char fam,u16 var,float x,float y,float w,float h,int mode){
+    if(s_niq>=24 || !aden_icon_ready(id,fam,var)) return 0;
+    s_iq[s_niq++]=(IconQ){id,var,fam,(s8)mode,x,y,w,h}; return 1;
 }
 static char s_glab[GCOLS][GROWS*(2*GLINE+8)+1];
 static char s_famtxt[24];
@@ -366,81 +395,6 @@ static void draw_icon(float cx,float cy,int st){
         default:      gfx_disk(cx,cy,8,C_LINE); gfx_disk(cx,cy,6,C_PANEL); break;
     }
 }
-static void tab_items(void){
-    if(!s_items_loaded) load_items();
-    if(!s_match) refilter();
-    if(g_player_state==0) aden_player_find();   /* spawning needs the player data */
-    /* the island search starts here too, so a failed read shows up on the first tab */
-    if(g_player_state==2 && g_island_state==0) aden_island_find();
-    if(loading_page(2)) return;
-    if(!s_nitems){ text(ROW0,C_WARN,"items.txt not found on SD card"); text(ROW0+1,C_DIM,"put it in sdmc/aden/items.txt"); return; }
-    int* cur=&s_cur[TAB_ITEMS];
-    if(*cur>s_nmatch-1) *cur= s_nmatch>0 ? s_nmatch-1 : 0;
-    put(ROW0,0,C_TEXT,"Search: %s%s   %d found", s_query, s_typing?"_":"", s_nmatch);
-    if(s_typing){
-        for(int r=0;r<4;r++){
-            char b[72]; int n=0;
-            for(int c=0;c<10;c++){ char ch=KEYS[r][c]; if(ch==' ')ch='_';
-                n+=aden_snprintf(b+n,sizeof b-n," %c ",ch); }
-            put(ROW0+2+r,0,C_TEXT,"%s",b);
-            if(r==s_ky){ s_hl_row=ROW0+2+r; s_hl_key=s_kx; }
-        }
-        text(ROW0+7,C_DIM,"A type   Y delete   X clear   B done");
-        if(up()) s_ky=(s_ky+3)%4; if(down()) s_ky=(s_ky+1)%4;
-        if(left()) s_kx=(s_kx+9)%10; if(right()) s_kx=(s_kx+1)%10;
-        if(pr(B_A) && s_qlen<22){ s_query[s_qlen++]=KEYS[s_ky][s_kx]; s_query[s_qlen]=0; refilter(); *cur=0; }
-        if(pr(B_Y) && s_qlen>0){ s_query[--s_qlen]=0; refilter(); *cur=0; }
-        if(pr(B_X)){ s_qlen=0; s_query[0]=0; refilter(); *cur=0; }
-        if(pr(B_B)||pr(B_PLUS)){ s_typing=0; s_press&=~(u64)(B_B|B_PLUS); }  /* B only leaves the keyboard */
-        return;
-    }
-    /* move in the grid; going past the first or last row turns the page */
-    if(left()  && *cur>0) (*cur)--;
-    if(right() && *cur<s_nmatch-1) (*cur)++;
-    if(up()    && *cur>=GCOLS) *cur-=GCOLS;
-    if(down()){ if(*cur+GCOLS<s_nmatch) *cur+=GCOLS; else if(*cur/GCOLS<(s_nmatch-1)/GCOLS) *cur=s_nmatch-1; }
-    if(pr(B_ZL)){ s_fam=(s_fam+NFAM-1)%NFAM; refilter(); *cur=0; }
-    if(pr(B_ZR)){ s_fam=(s_fam+1)%NFAM; refilter(); *cur=0; }
-    /* stackables go up to 40 full slots, the rest to 99; s_qty keeps the asked amount across items */
-    Item* si= s_nmatch ? &s_items[s_match[*cur]] : 0;
-    int mx= si && si->stack>1 ? 40*si->stack : 99, q= s_qty>mx ? mx : s_qty;
-    if(pr(B_MINUS) && q>1)  s_qty = q>100 ? q-100 : q>10 ? q-10 : q-1;
-    if(pr(B_PLUS)  && q<mx){ s_qty = q>=100 ? q+100 : q>=10 ? q+10 : q+1; if(s_qty>mx) s_qty=mx; }
-    q= s_qty>mx ? mx : s_qty;
-    if(pr(B_Y)) { s_typing=1; return; }
-    /* tiles of the current page */
-    int top=(*cur/GPAGE)*GPAGE, pages=(s_nmatch+GPAGE-1)/GPAGE;
-    s_grid_on=1; s_grid_sel=*cur-top; s_grid_n=0;
-    char la[GPAGE][GLINE+1], lb[GPAGE][GLINE+1];
-    for(int i=0;i<GPAGE && top+i<s_nmatch;i++){ Item* it=&s_items[s_match[top+i]]; s_grid_fam[i]=fam_idx(it->fam); s_grid_id[i]=it->id; s_grid_fc[i]=it->fam; wrap2(it->name,la[i],lb[i]); s_grid_n++; }
-    aden_icons_want(s_grid_n,s_grid_id,s_grid_fc);   /* only the tiles on this page are loaded */
-    for(int c=0;c<GCOLS;c++){
-        char* o=s_glab[c]; int n=0, cap=(int)sizeof s_glab[c];
-        for(int r=0;r<GROWS;r++){ int i=r*GCOLS+c;
-            n+=aden_snprintf(o+n,cap-n,"%s\n%s\n\n\n\n", i<s_grid_n?la[i]:"", i<s_grid_n?lb[i]:""); }
-    }
-    aden_snprintf(s_famtxt,sizeof s_famtxt,"< %s >",FAMN[s_fam]);
-    if(si) put(ROW0+23,0,C_TEXT,"%s   (%04X, page %d/%d)",si->name,si->id,top/GPAGE+1,pages);
-    else   text(ROW0+23,C_DIM,"Nothing found - change the search or the family (ZL/ZR)");
-    text(26,C_DIM,"A give  Y search  ZL/ZR family  -/+ amount  X send to");
-    if(si && needs_param(si->id)) text(ROW0+24,C_DIM,"Needs a recipe ID - cannot be spawned here");
-    else if(g_player_state==2){ const char* nm=aden_player_name(aden_player_active());
-        put(ROW0+24,0,C_TEXT,"Amount: %d (max %d)   To: %s of %s",q,mx,s_to_storage?"home storage":"pockets",nm[0]?nm:"you"); }
-    else put(ROW0+24,0,C_TEXT,"Amount: %d (max %d)   To: %s",q,mx,s_to_storage?"home storage":"pockets");
-    if(pr(B_X)) s_to_storage=!s_to_storage;
-    if(pr(B_A) && s_nmatch){
-        Item* it=si; const char* np=needs_param(it->id);
-        if(np){ aden_snprintf(s_status,sizeof s_status,"%s",np); return; }
-        int r= s_to_storage ? aden_storage_add(it->id,q,it->stack) : aden_pocket_add(it->id,q,it->stack);
-        /* -1 player data not ready, -2 data looks wrong (nothing written) */
-        if(r==-1) aden_snprintf(s_status,sizeof s_status,s_to_storage?"Home storage not ready yet - try again in a moment":"Player data not ready yet - try again in a moment");
-        else if(r<0) aden_snprintf(s_status,sizeof s_status,s_to_storage?"Home storage looks wrong - nothing was added":"Pockets look wrong - nothing was added");
-        else if(s_to_storage) aden_snprintf(s_status,sizeof s_status,r==0?"Home storage is full":r<q?"Sent %d x %s (home storage now full)":"Sent %d x %s to home storage",r,it->name);
-        else if(r==0) aden_snprintf(s_status,sizeof s_status,"Your pockets are full");
-        else if(r<q) aden_snprintf(s_status,sizeof s_status,"Added %d x %s (pockets now full)",r,it->name);
-        else aden_snprintf(s_status,sizeof s_status,"Added %d x %s to your pockets",r,it->name);
-    }
-}
 /* ---------- shared bits of the redesigned tabs ---------- */
 #define C_WHITE  0xFFFFFFFF
 #define C_WELL   0xEFE7D2FF
@@ -473,6 +427,190 @@ static void meter(float x,float y,float w,float h,float f,u32 c){
     if(f>0){ float fw=w*f; if(fw<h) fw=h; box(x,y,fw,h,h*0.5f,c); }
 }
 
+/* ---------- give sheet: the chosen item, its colour or variants, the amount, where it goes ---------- */
+enum { O_COLOR, O_BODY, O_FAB, O_QTY, O_DEST };
+static struct { int opt[5], no, nb, nf, mx, fi; u16 id, var; char fam; } SH;
+static void sheet_open(int i){
+    s_sheet=1; s_sh_item=i; s_sh_col=s_sh_body=s_sh_fab=s_sh_row=0; s_qty=1; s_status[0]=0;
+}
+static void sheet_close(void){ s_sheet=0; s_qty=1; }
+#define SH_ROW(k) (7+2*(k))   /* text row of option k */
+#define SH_GIVE   18          /* text row of the give button */
+static void paint_sheet(void){
+    box(20,108,530,128,24,C_WHITE);
+    box(36,122,100,100,20,C_WELL);
+    if(!icon_at(SH.id,SH.fam,SH.var,WX(42),WY(128),88,88,aden_icon_mode())) dot(86,172,26,FAMCOL[SH.fi]);
+    for(int k=0;k<SH.no;k++) box(20,GY(SH_ROW(k))-10,530,36,18,k==s_sh_row?C_PILL:C_WELL);
+    box(20,GY(SH_GIVE)-10,530,36,18,C_HEAD);
+}
+static void give(const Item* it,u16 var,int q,const char* what){
+    const char* np=needs_param(it->id);
+    if(np){ aden_snprintf(s_status,sizeof s_status,"%s",np); return; }
+    int r= s_to_storage ? aden_storage_add(it->id,q,it->stack,var) : aden_pocket_add(it->id,q,it->stack,var);
+    /* -1 player data not ready, -2 data looks wrong (nothing written) */
+    if(r==-1) aden_snprintf(s_status,sizeof s_status,s_to_storage?"Home storage not ready yet - try again in a moment":"Player data not ready yet - try again in a moment");
+    else if(r<0) aden_snprintf(s_status,sizeof s_status,s_to_storage?"Home storage looks wrong - nothing was added":"Pockets look wrong - nothing was added");
+    else if(s_to_storage) aden_snprintf(s_status,sizeof s_status,r==0?"Home storage is full":r<q?"Sent %d x %s (home storage now full)":"Sent %d x %s to home storage",r,what);
+    else if(r==0) aden_snprintf(s_status,sizeof s_status,"Your pockets are full");
+    else if(r<q) aden_snprintf(s_status,sizeof s_status,"Added %d x %s (pockets now full)",r,what);
+    else aden_snprintf(s_status,sizeof s_status,"Added %d x %s to your pockets",r,what);
+}
+/* what the current options pick: the item (colour), its variant count field, the option rows */
+static Item* sheet_pick(void){
+    Item* L=&s_items[s_sh_item];
+    if(s_sh_col>=L->ncol) s_sh_col=0;
+    Item* it=L+s_sh_col;
+    SH.nb=vcount(it->body); SH.nf=vcount(it->fab);
+    if(s_sh_body>=SH.nb) s_sh_body=0;
+    if(s_sh_fab>=SH.nf) s_sh_fab=0;
+    SH.no=0;
+    if(L->ncol>1) SH.opt[SH.no++]=O_COLOR;
+    if(SH.nb) SH.opt[SH.no++]=O_BODY;
+    if(SH.nf) SH.opt[SH.no++]=O_FAB;
+    SH.opt[SH.no++]=O_QTY; SH.opt[SH.no++]=O_DEST;
+    if(s_sh_row>=SH.no) s_sh_row=SH.no-1;
+    /* stackables go up to 40 full slots, the rest to 99 */
+    SH.mx= it->stack>1 ? 40*it->stack : 99;
+    SH.id=it->id; SH.fam=it->fam; SH.fi=fam_idx(it->fam); SH.var=(u16)(s_sh_body+32*s_sh_fab);
+    return it;
+}
+static void sheet(void){
+    Item* L=&s_items[s_sh_item]; Item* it=sheet_pick();
+    if(pr(B_B)){ sheet_close(); s_press&=~(u64)B_B; return; }   /* B only closes the sheet */
+    if(up() && s_sh_row>0) s_sh_row--;
+    if(down() && s_sh_row<SH.no-1) s_sh_row++;
+    int o=SH.opt[s_sh_row], d=0;
+    if(left()) d--; if(right()) d++;
+    if(d) switch(o){
+        case O_COLOR: s_sh_col=(s_sh_col+L->ncol+d)%L->ncol; break;
+        case O_BODY:  s_sh_body=(s_sh_body+SH.nb+d)%SH.nb; break;
+        case O_FAB:   s_sh_fab=(s_sh_fab+SH.nf+d)%SH.nf; break;
+        case O_QTY:   s_qty+=d; break;
+        case O_DEST:  s_to_storage=!s_to_storage; break;
+    }
+    /* the amount also answers from any row: -/+ 1, ZL/ZR to the previous/next ten, X max, Y back to 1 */
+    if(pr(B_MINUS)) s_qty--;
+    if(pr(B_PLUS))  s_qty++;
+    if(pr(B_ZL)) s_qty=(s_qty-1)/10*10;
+    if(pr(B_ZR)) s_qty=s_qty/10*10+10;
+    if(pr(B_X))  s_qty=SH.mx;
+    if(pr(B_Y))  s_qty=1;
+    it=sheet_pick();
+    if(s_qty>SH.mx) s_qty=SH.mx;
+    if(s_qty<1) s_qty=1;
+    int q=s_qty;
+    /* the name in messages: a clothing item's name holds its colour, a remake gets its variant */
+    char bn[24], fn[24], what[64]; vname(it->body,s_sh_body+1,bn,sizeof bn); vname(it->fab,s_sh_fab+1,fn,sizeof fn);
+    if(SH.nb && SH.nf) aden_snprintf(what,sizeof what,"%s (%s, %s)",it->name,bn,fn);
+    else if(SH.nb||SH.nf) aden_snprintf(what,sizeof what,"%s (%s)",it->name,SH.nb?bn:fn);
+    else aden_snprintf(what,sizeof what,"%s",it->name);
+    if(pr(B_A)) give(it,SH.var,q,what);
+    aden_icons_want(1,&SH.id,&SH.fam,&SH.var);
+
+    /* header card: icon, name, family and id */
+    char base[64]; int n=base_len(it); if(n>63) n=63; memcpy(base,it->name,n); base[n]=0;
+    if(n<=22) big(150,128,1.6f,C_TEXT,"%s",base); else at(1,15,C_TEXT,"%s",base);
+    at(3,15,C_DIM,"%s - %s",FAMN[SH.fi],it->cat);
+    if(SH.var) at(4,15,C_DIM,"Item %04X   variant %d",it->id,SH.var);
+    else if(it->stack>1) at(4,15,C_DIM,"Item %04X   stacks to %d",it->id,it->stack);
+    else at(4,15,C_DIM,"Item %04X",it->id);
+    /* option rows: name on the left, "< value >" and its position on the right */
+    for(int k=0;k<SH.no;k++){
+        int r=SH_ROW(k); char v[40];
+        switch(SH.opt[k]){
+            case O_COLOR: { const char* c=it->name+base_len(it); int m=(int)strlen(c);
+                if(m>3){ c+=2; m-=3; } else { c=it->name; m=(int)strlen(c); }
+                if(m>32) m=32; memcpy(v,c,m); v[m]=0;
+                at(r,2,C_TEXT,"Color"); at(r,20,C_TEXT,"< %s >",v); at_r(r,62,C_DIM,"%d/%d",s_sh_col+1,L->ncol); break; }
+            case O_BODY: vname(it->body,0,v,sizeof v); at(r,2,C_TEXT,"%s",clip(v,17));
+                at(r,20,C_TEXT,"< %s >",clip(bn,23)); at_r(r,62,C_DIM,"%d/%d",s_sh_body+1,SH.nb); break;
+            case O_FAB:  vname(it->fab,0,v,sizeof v); at(r,2,C_TEXT,"%s",clip(v,17));
+                at(r,20,C_TEXT,"< %s >",clip(fn,23)); at_r(r,62,C_DIM,"%d/%d",s_sh_fab+1,SH.nf); break;
+            case O_QTY:  at(r,2,C_TEXT,"Amount"); at(r,20,C_TEXT,"< %d >",q); at_r(r,62,C_DIM,"max %d",SH.mx); break;
+            case O_DEST: { int f= s_to_storage ? aden_storage_free() : aden_pocket_free();
+                at(r,2,C_TEXT,"Send to"); at(r,20,C_TEXT,"< %s >",s_to_storage?"Home storage":"Pockets");
+                if(f>=0) at_r(r,62,C_DIM,"%d free",f); break; }
+        }
+    }
+    /* give button: how many slots the amount takes */
+    int slots= it->stack>1 ? (q+it->stack-1)/it->stack : q;
+    const char* who=aden_player_name(aden_player_active());
+    at(SH_GIVE,2,C_WHITE,"A  Give %d to %s",q,s_to_storage?"home storage":who[0]?clip(who,12):"pockets");
+    at_r(SH_GIVE,62,C_WHITE,"%d slot%s",slots,slots==1?"":"s");
+    text(26,C_DIM,o==O_QTY?"Left/Right 1  ZL/ZR 10  X max  Y one  A give  B back"
+                          :"Up/Down pick  Left/Right change  A give  B back");
+    s_status_row=SH_GIVE+2;
+    s_paint=paint_sheet;
+}
+static void tab_items(void){
+    if(!s_items_loaded) load_items();
+    if(!s_match) refilter();
+    if(g_player_state==0) aden_player_find();   /* spawning needs the player data */
+    /* the island search starts here too, so a failed read shows up on the first tab */
+    if(g_player_state==2 && g_island_state==0) aden_island_find();
+    if(loading_page(2)) return;
+    if(!s_nitems){ text(ROW0,C_WARN,"items.txt not found on SD card"); text(ROW0+1,C_DIM,"put it in sdmc/aden/items.txt"); return; }
+    int* cur=&s_cur[TAB_ITEMS];
+    if(*cur>s_nmatch-1) *cur= s_nmatch>0 ? s_nmatch-1 : 0;
+    put(ROW0,0,C_TEXT,"Search: %s%s   %d found", s_query, s_typing?"_":"", s_nmatch);
+    if(s_typing){
+        for(int r=0;r<4;r++){
+            char b[72]; int n=0;
+            for(int c=0;c<10;c++){ char ch=KEYS[r][c]; if(ch==' ')ch='_';
+                n+=aden_snprintf(b+n,sizeof b-n," %c ",ch); }
+            put(ROW0+2+r,0,C_TEXT,"%s",b);
+            if(r==s_ky){ s_hl_row=ROW0+2+r; s_hl_key=s_kx; }
+        }
+        text(ROW0+7,C_DIM,"A type   Y delete   X clear   B done");
+        if(up()) s_ky=(s_ky+3)%4; if(down()) s_ky=(s_ky+1)%4;
+        if(left()) s_kx=(s_kx+9)%10; if(right()) s_kx=(s_kx+1)%10;
+        if(pr(B_A) && s_qlen<22){ s_query[s_qlen++]=KEYS[s_ky][s_kx]; s_query[s_qlen]=0; refilter(); *cur=0; }
+        if(pr(B_Y) && s_qlen>0){ s_query[--s_qlen]=0; refilter(); *cur=0; }
+        if(pr(B_X)){ s_qlen=0; s_query[0]=0; refilter(); *cur=0; }
+        if(pr(B_B)||pr(B_PLUS)){ s_typing=0; s_press&=~(u64)(B_B|B_PLUS); }  /* B only leaves the keyboard */
+        return;
+    }
+    if(pr(B_A) && s_nmatch){ sheet_open(s_match[*cur]); s_press&=~(u64)B_A; }
+    if(s_sheet){ sheet(); return; }
+    /* move in the grid; going past the first or last row turns the page */
+    if(left()  && *cur>0) (*cur)--;
+    if(right() && *cur<s_nmatch-1) (*cur)++;
+    if(up()    && *cur>=GCOLS) *cur-=GCOLS;
+    if(down()){ if(*cur+GCOLS<s_nmatch) *cur+=GCOLS; else if(*cur/GCOLS<(s_nmatch-1)/GCOLS) *cur=s_nmatch-1; }
+    if(pr(B_ZL)){ s_fam=(s_fam+NFAM-1)%NFAM; refilter(); *cur=0; }
+    if(pr(B_ZR)){ s_fam=(s_fam+1)%NFAM; refilter(); *cur=0; }
+    Item* si= s_nmatch ? &s_items[s_match[*cur]] : 0;
+    if(pr(B_Y)) { s_typing=1; return; }
+    /* tiles of the current page */
+    int top=(*cur/GPAGE)*GPAGE, pages=(s_nmatch+GPAGE-1)/GPAGE;
+    s_grid_on=1; s_grid_sel=*cur-top; s_grid_n=0;
+    char la[GPAGE][GLINE+1], lb[GPAGE][GLINE+1];
+    for(int i=0;i<GPAGE && top+i<s_nmatch;i++){ Item* it=&s_items[s_match[top+i]];
+        s_grid_fam[i]=fam_idx(it->fam); s_grid_id[i]=it->id; s_grid_fc[i]=it->fam; s_grid_n++;
+        s_grid_nv[i]= it->ncol>1 ? it->ncol : vcount(it->body)+vcount(it->fab);
+        /* a clothing item shows its name without the colour, and how many colours it has */
+        if(it->ncol>1){ char b[64]; int n=base_len(it); if(n>63) n=63; memcpy(b,it->name,n); b[n]=0;
+            wrap2(b,la[i],lb[i]); if(!lb[i][0]) aden_snprintf(lb[i],GLINE+1,"%d colors",it->ncol); }
+        else wrap2(it->name,la[i],lb[i]);
+    }
+    aden_icons_want(s_grid_n,s_grid_id,s_grid_fc,0);   /* only the tiles on this page are loaded */
+    for(int c=0;c<GCOLS;c++){
+        char* o=s_glab[c]; int n=0, cap=(int)sizeof s_glab[c];
+        for(int r=0;r<GROWS;r++){ int i=r*GCOLS+c;
+            n+=aden_snprintf(o+n,cap-n,"%s\n%s\n\n\n\n", i<s_grid_n?la[i]:"", i<s_grid_n?lb[i]:""); }
+    }
+    aden_snprintf(s_famtxt,sizeof s_famtxt,"< %s >",FAMN[s_fam]);
+    if(si){ int n=base_len(si); char b[64]; if(n>63) n=63; memcpy(b,si->name,n); b[n]=0;
+        put(ROW0+23,0,C_TEXT,"%s   (%04X, page %d/%d)",b,si->id,top/GPAGE+1,pages);
+        int nb=vcount(si->body), nf=vcount(si->fab); char pb[24], pf[24]; vname(si->body,0,pb,sizeof pb); vname(si->fab,0,pf,sizeof pf);
+        if(si->ncol>1) put(ROW0+24,0,C_DIM,"%d colors - A to choose one",si->ncol);
+        else if(nb && nf) put(ROW0+24,0,C_DIM,"%s: %d   %s: %d - A to choose",pb,nb,pf,nf);
+        else if(nb||nf) put(ROW0+24,0,C_DIM,"%s: %d variants - A to choose",nb?pb:pf,nb?nb:nf);
+        else if(si->stack>1) put(ROW0+24,0,C_DIM,"Stacks to %d",si->stack);
+    }
+    else text(ROW0+23,C_DIM,"Nothing found - change the search or the family (ZL/ZR)");
+    text(26,C_DIM,"A choose  Y search  ZL/ZR family  L/R tabs");
+}
 /* ---------- Player tab: resident card, currency tokens over a counter, unlock cards ----------
    Up/Down picks a zone, Left/Right an entry in it. A on a currency opens its digits. */
 enum { Z_WHO, Z_MONEY, Z_UNLOCK };
@@ -579,7 +717,7 @@ static void tab_player(void){
             if(pr(B_A)){
                 if(s_punl==0){ int n=aden_recipes_learn_all(); aden_snprintf(s_status,sizeof s_status,n<0?"Recipe book not found":(n?"Learned %d new recipes":"You already know every recipe"),n); }
                 else if(s_punl==1){ int n=aden_reactions_learn_all(); aden_snprintf(s_status,sizeof s_status,n<0?"Reactions not found":(n?"Learned %d new reactions":"You already know every reaction"),n); }
-                else { int n=aden_pocket_add(0x08A4,40,1); aden_snprintf(s_status,sizeof s_status,n>0?"Added %d Bell bags":n==0?"Your pockets are full":n==-1?"Player data not ready yet - try again in a moment":"Pockets look wrong - nothing was added",n); }
+                else { int n=aden_pocket_add(0x08A4,40,1,0); aden_snprintf(s_status,sizeof s_status,n>0?"Added %d Bell bags":n==0?"Your pockets are full":n==-1?"Player data not ready yet - try again in a moment":"Pockets look wrong - nothing was added",n); }
             }
         }
     }
@@ -980,7 +1118,9 @@ static void draw_grid(void){
         if(i==s_grid_sel) gfx_rrect(x-5,y+5,GTILE+10,GTILE+10,22,C_PILL);
         gfx_rect(x,y,GTILE,GTILE,C_TILE);
         /* the item's icon once it is loaded, its family colour until then */
-        if(!icon_at(s_grid_id[i],s_grid_fc[i],x+22,y-2,46,46,aden_icon_mode())) gfx_disk(x+GTILE*0.5f,y-27,15,FAMCOL[s_grid_fam[i]]);
+        if(!icon_at(s_grid_id[i],s_grid_fc[i],0,x+22,y-2,46,46,aden_icon_mode())) gfx_disk(x+GTILE*0.5f,y-27,15,FAMCOL[s_grid_fam[i]]);
+        /* three dots in the corner: colours or variants to choose from in the give sheet */
+        if(s_grid_nv[i]>1) for(int k=0;k<3;k++) gfx_disk(x+GTILE-10-k*7,y-9,2.5f,C_HEAD);
     }
 }
 static void draw_grid_text(void){
@@ -1023,11 +1163,11 @@ void aden_menu_draw(void){
     if(g_aden_open_request && !g_menu_open){ g_menu_open=1; s_armed=0; }
     /* after closing, give input back to the game only once the closing B (and all else) is released */
     if(!g_menu_open){ s_was_open=0; if(g_input_hold && aden_input_take()==0) g_input_hold=0; return; }
-    if(!s_was_open){ s_was_open=1; s_seen_search=0; s_done_at=0; aden_log("menu opened"); }
+    if(!s_was_open){ s_was_open=1; s_seen_search=0; s_done_at=0; sheet_close(); aden_log("menu opened"); }
     poll();
     /* ignore input until every button from the phone tap has been released */
     if(!s_armed){ if(s_now==0) s_armed=1; s_press=0; }
-    if(!s_typing && !s_pedit){
+    if(!s_typing && !s_pedit && !(s_sheet && s_tab==TAB_ITEMS)){
         if(pr(B_L)) s_tab=(s_tab+NTABS-1)%NTABS;
         if(pr(B_R)) s_tab=(s_tab+1)%NTABS;
     }
@@ -1046,7 +1186,7 @@ void aden_menu_draw(void){
     flush(TX,CY);
     flush_big();
     if(s_grid_on) draw_grid_text();
-    for(int i=0;i<s_niq;i++) aden_icon_draw(s_iq[i].id,s_iq[i].fam,s_iq[i].x,s_iq[i].y,s_iq[i].w,s_iq[i].h,s_iq[i].mode);
+    for(int i=0;i<s_niq;i++) aden_icon_draw(s_iq[i].id,s_iq[i].fam,s_iq[i].var,s_iq[i].x,s_iq[i].y,s_iq[i].w,s_iq[i].h,s_iq[i].mode);
     s_niq=0;
     if(pr(B_B) && !s_typing && !s_pedit){ g_input_hold=1; g_menu_open=0; g_aden_open_request=0; s_status[0]=0; aden_log("menu closed"); }
 }
