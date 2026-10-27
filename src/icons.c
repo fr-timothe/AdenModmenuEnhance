@@ -181,6 +181,10 @@ HIDDEN void aden_icons_tick(void){
         /* a failed load that completes late still holds its archive: let it go */
         if(s_ic[i].st==I_FAIL && *(u32*)(s+0x1a0)==1 && (s[0x18]&2) && *(int*)(s+0x100)!=1 && ((u8(*)(void*))AT(A_FINISH))(s)) *(u32*)(s+0x1a0)=2;
     }
+    /* menu closed: give the archives and textures back, one per frame (never one still loading);
+       the slots are stepped until the game has unloaded them, then left alone */
+    extern volatile int g_menu_open;
+    if(!nw && !g_menu_open) for(int i=0;i<ICON_N;i++) if(s_ic[i].st==I_READY || s_ic[i].st==I_FAIL){ slot_release(i); break; }
     int asked=0;
     for(int w=0;w<nw;w++){
         u32 key=s_want[w]; if(!key) continue;

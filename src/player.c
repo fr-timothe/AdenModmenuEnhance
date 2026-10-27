@@ -16,6 +16,7 @@
 static uptr s_copy[MAXCOPIES]; static int s_ncopies;
 #define PERS_P      0x37CA8   /* pocket anchor offset inside the personal save */
 #define PERS_ID_PID (0xC248+0x1C)
+#define PERS_SIZE   0x74A40   /* personal save */
 #define MAXCAND 48
 #define MAXPLAYERS 8
 #define DEV_MIN     0x74A40   /* PERS_SIZE: smallest DeviceShared region the second pass scans */
@@ -32,17 +33,27 @@ static int scan_ok(const MemoryInfo* mi, int dev){
     return (mi->perm&3)==3 && mi->type==5 && (dev ? MI_DEV(*mi) && mi->size>=DEV_MIN : MI_PLAIN(*mi) && mi->size>=0x1000);
 }
 static u64 s_skip_mb[8]; static int s_skip_n[8];   /* rw heap the player scan skipped, by attr&7 (logged per search) */
-/* targeted reads (a few bytes at a known address) only need the page not to be Locked, as in v0.5.3:
-   the save buffers themselves can sit in IPC/device-attributed pages, and MI_PLAIN there hid every player */
-#define MI_RW(mi)    (((mi).attr&1)==0)
+/* targeted reads (a few bytes at a known address) need the page not to be Locked, and not DeviceShared
+   either: one CPU read of a GPU-mapped page leaves Eden's reactive flushing copying that buffer every
+   frame (a lasting FPS drop). The save buffers sit in plain or IpcLocked pages (#56: never DeviceShared);
+   only a search that had to read the GPU-mapped heap (s_gpu_p / s_gpu_i) may touch those pages. */
+static volatile int s_gpu_p, s_gpu_i;   /* player / island data was looked for in DeviceShared memory */
+static u32 s_gpu_rej;                   /* targeted reads refused for DeviceShared pages (logged per search) */
+static int mi_rw(const MemoryInfo* mi){
+    if(mi->attr&1) return 0;
+    if((mi->attr&4) && !s_gpu_p && !s_gpu_i){ s_gpu_rej++; return 0; }
+    return 1;
+}
+#define MI_RW(mi)    mi_rw(&(mi))
 static int s_attr_rej; static u32 s_attr_last;   /* base_ok rejects caused by attributes (logged per search) */
 /* searches share the CPU with the game: nap at every SCAN_CHUNK boundary (~1k naps per 4 GB: few, since
    Eden can round a guest sleep up to 1-15 ms), then re-check the region, since the game may remap memory while we sleep */
 #define SCAN_CHUNK  0x400000
 #define SCAN_NAP    1000000    /* ns */
 #define SEARCH_PRIO 24         /* below the game's default 16, so its threads preempt ours */
-static int scan_nap(uptr a, uptr* end, int dev){
-    nn_os_SleepThread(SCAN_NAP);
+static u64 s_nap_p, s_nap_i;   /* ticks the player / island scan spent napping (logged per search) */
+static int scan_nap(uptr a, uptr* end, int dev, u64* nap){
+    u64 t=nn_os_GetSystemTick(); nn_os_SleepThread(SCAN_NAP); *nap+=nn_os_GetSystemTick()-t;
     MemoryInfo mi; u32 pi;
     if(svcQueryMemory(&mi,&pi,a) || (mi.perm&3)!=3 || mi.type!=5 || (dev ? !MI_DEV(mi) : !MI_PLAIN(mi))) return 0;
     if(mi.addr+mi.size<*end) *end=mi.addr+mi.size;   /* region split: stop at its new end, the caller resumes there */
@@ -159,6 +170,18 @@ static void use_player(int i){
     for(int k=0;k<s_players[i].n && k<MAXCOPIES;k++) s_copy[s_ncopies++]=s_players[i].P[k];
     find_fields(); find_personal_bases();
 }
+/* P passed sig_ok and base_ok: file it under its player, or count an unused resident slot */
+static void add_copy(uptr P, int* empty){
+    u32 pid=*(u32*)(P-PERS_P+PERS_ID_PID);
+    u16 c0=*(u16*)(P-PERS_P+PERS_ID_PID+4);
+    if(!pid || !c0){ (*empty)++; return; }     /* unused resident slot (no id / no name) */
+    int g=-1; for(int j=0;j<s_nplayers;j++) if(s_players[j].pid==pid) g=j;
+    if(g<0 && s_nplayers<MAXPLAYERS){ g=s_nplayers++; s_players[g].pid=pid; s_players[g].n=0; s_players[g].drop=0;
+        utf16_name(s_players[g].name,sizeof s_players[g].name,(const u16*)(P-PERS_P+PERS_ID_PID+4)); }
+    if(g>=0 && s_players[g].n<MAXCOPIES){ s_players[g].P[s_players[g].n++]=P;
+        aden_log("player %s (id %x) copy at %lx, wallet %u", s_players[g].name, pid, P, enc_get((EncInt*)(P+0xB8))); }
+    else if(g>=0){ s_players[g].drop++; aden_log("player %s copy at %lx dropped: %d-copy cap", s_players[g].name, P, MAXCOPIES); }
+}
 /* one pass over the heap; dev=0 plain memory, dev=1 DeviceShared memory (see MI_DEV) */
 static void scan_players(int dev, int* empty){
     uptr a=0; MemoryInfo mi; u32 pi;
@@ -168,47 +191,106 @@ static void scan_players(int dev, int* empty){
         if(!dev && (mi.perm&3)==3 && mi.type==5 && !MI_PLAIN(mi)){ s_skip_n[mi.attr&7]++; s_skip_mb[mi.attr&7]+=mi.size; }
         if(scan_ok(&mi,dev)){
             for(uptr P=mi.addr+0x20; P+0xC0<end; P+=8){
-                if(!(P&(SCAN_CHUNK-1))){ g_scan_mb+=SCAN_CHUNK>>20; if(!scan_nap(P,&end,dev) || P+0xC0>=end) break; }
+                if(!(P&(SCAN_CHUNK-1))){ g_scan_mb+=SCAN_CHUNK>>20; if(!scan_nap(P,&end,dev,&s_nap_p) || P+0xC0>=end) break; }
                 if(!count1_ok(*(u32*)(P+0xA0)) || !count2_ok(*(u32*)(P-0x18))) continue;
                 if(!sig_ok(P)) continue;
-                if(base_ok(P)){
-                    u32 pid=*(u32*)(P-PERS_P+PERS_ID_PID);
-                    u16 c0=*(u16*)(P-PERS_P+PERS_ID_PID+4);
-                    if(!pid || !c0){ (*empty)++; continue; }     /* unused resident slot (no id / no name) */
-                    int g=-1; for(int j=0;j<s_nplayers;j++) if(s_players[j].pid==pid) g=j;
-                    if(g<0 && s_nplayers<MAXPLAYERS){ g=s_nplayers++; s_players[g].pid=pid; s_players[g].n=0; s_players[g].drop=0;
-                        utf16_name(s_players[g].name,sizeof s_players[g].name,(const u16*)(P-PERS_P+PERS_ID_PID+4)); }
-                    if(g>=0 && s_players[g].n<MAXCOPIES){ s_players[g].P[s_players[g].n++]=P;
-                        aden_log("player %s (id %x) copy at %lx, wallet %u", s_players[g].name, pid, P, enc_get((EncInt*)(P+0xB8))); }
-                    else if(g>=0){ s_players[g].drop++; aden_log("player %s copy at %lx dropped: %d-copy cap", s_players[g].name, P, MAXCOPIES); }
-                } else if(s_ncand<MAXCAND) s_cand[s_ncand++]=P;   /* pocket found but layout unknown (kept for fallback only) */
+                if(base_ok(P)) add_copy(P,empty);
+                else if(s_ncand<MAXCAND) s_cand[s_ncand++]=P;   /* pocket found but layout unknown (kept for fallback only) */
             }
         }
         a=end;
     }
 }
+/* ---- where the saves were at the last search ----
+   The heap starts at a new address each boot, but the game allocates its save buffers in the
+   same order, so their offset from the heap start tends to repeat. A search that finds the
+   saves writes those offsets to the SD card; the next search checks them first and skips the
+   heap scan only when every remembered copy passes the same checks as the scan and nothing
+   else is remembered. Anything else (another game build, a moved buffer) runs the full scan. */
+#define HINT_PLAYERS "adensd:/aden/hint_player.bin"
+#define HINT_ISLAND  "adensd:/aden/hint_island.bin"
+#define HINT_MAGIC   0x31544E48u   /* "HNT1" */
+typedef struct { u32 pid, n; u64 off[MAXCOPIES]; } HintPlayer;
+typedef struct { u32 magic, code, n, pad; HintPlayer p[MAXPLAYERS]; } HintPlayers;
+typedef struct { u32 magic, code, n, pad; u64 off[4]; } HintIsland;
+static HintPlayers s_hp;   /* player thread only */
+static HintIsland s_hi;    /* island thread only */
+static int range_chk(uptr a, uptr len, int mode);
+#define RC_HEAP  1   /* range_chk: game heap only */
+#define RC_PLAIN 2   /* range_chk: no DeviceShared page (the scans read those last, see MI_PLAIN) */
+static uptr heap_base(void){ u64 b=0; return svcGetInfo(&b,4,CUR_PROCESS_HANDLE,0) ? 0 : b; }   /* HeapRegionAddress */
+static int hint_read(const char* path, void* h, u32 size){
+    FsFile f; s64 sz=0; int ok=0;
+    if(!aden_sd_ready() || nn_fs_OpenFile(&f,path,FS_READ)) return 0;
+    if(!nn_fs_GetFileSize(&sz,f) && sz==size && !nn_fs_ReadFile(f,0,h,size)) ok=1;
+    nn_fs_CloseFile(f);
+    const u32* w=(const u32*)h;
+    return ok && w[0]==HINT_MAGIC && w[1]==(u32)g_main_text_size;   /* same game build */
+}
+static void hint_write(const char* path, void* h, u32 size){
+    u32* w=(u32*)h; w[0]=HINT_MAGIC; w[1]=(u32)g_main_text_size;
+    FsFile f; if(!aden_sd_ready()) return;
+    nn_fs_DeleteFile(path);
+    if(nn_fs_CreateFile(path,size) || nn_fs_OpenFile(&f,path,FS_WRITE)) return;
+    FsWriteOption o={1}; nn_fs_WriteFile(f,0,h,size,&o); nn_fs_CloseFile(f);
+}
+static int hint_players(void){
+    HintPlayers* h=&s_hp; uptr hb=heap_base(); int empty=0;
+    if(!hb || !hint_read(HINT_PLAYERS,h,sizeof *h) || !h->n || h->n>MAXPLAYERS) return 0;
+    for(u32 i=0;i<h->n;i++){
+        if(!h->p[i].n || h->p[i].n>MAXCOPIES) goto miss;
+        for(u32 k=0;k<h->p[i].n;k++){ uptr P=hb+h->p[i].off[k];
+            if(!range_chk(P-0xB8,0x178,RC_HEAP|RC_PLAIN) || !range_chk(P-PERS_P,PERS_SIZE,RC_HEAP|RC_PLAIN)) goto miss;
+            if(!sig_ok(P) || !base_ok(P) || *(u32*)(P-PERS_P+PERS_ID_PID)!=h->p[i].pid) goto miss;
+            add_copy(P,&empty); }
+    }
+    return s_nplayers;
+miss:
+    aden_log("search: the last search's player offsets do not match, scanning the heap");
+    s_nplayers=0; return 0;
+}
+static void hint_players_save(void){
+    HintPlayers* h=&s_hp; uptr hb=heap_base(); if(!hb) return;
+    memset(h,0,sizeof *h); h->n=s_nplayers;
+    for(int i=0;i<s_nplayers;i++){ h->p[i].pid=s_players[i].pid; h->p[i].n=s_players[i].n;
+        for(int k=0;k<s_players[i].n;k++) h->p[i].off[k]=s_players[i].P[k]-hb; }
+    hint_write(HINT_PLAYERS,h,sizeof *h);
+}
 static uptr s_pb[MAXF]; static int s_npb;          /* personal save bases */
 volatile int g_step[NSTEPS]; volatile u32 g_step_n[NSTEPS]; volatile u32 g_scan_mb;
+static volatile int s_full, s_full_isl;   /* the next player / island search skips the remembered offsets */
 static void step(int i,int st,u32 n){ g_step_n[i]=n; __atomic_store_n(&g_step[i],st,__ATOMIC_RELEASE); }
+/* the heap scan: plain memory, then the GPU-mapped heap if no player is there */
+static void scan_all_players(u64 t0){
+    int empty=0; s_nap_p=0;
+    scan_players(0,&empty);
+    aden_log("search: %d players, %d empty slots, %d other pocket matches, %lu ms (%u MB read, %lu ms napping)", s_nplayers, empty, s_ncand, (nn_os_GetSystemTick()-t0)/19200, g_scan_mb, s_nap_p/19200);
+    if(s_attr_rej) aden_log("search: %d pockets skipped for memory attributes (last attr %x)", s_attr_rej, s_attr_last);
+    if(s_gpu_rej) aden_log("search: %u reads of GPU-mapped pages avoided", s_gpu_rej);
+    for(int i=0;i<8;i++) if(s_skip_n[i]) aden_log("search: skipped heap with attr %x: %d regions, %lu MB", i, s_skip_n[i], s_skip_mb[i]>>20);
+    step(STEP_MEM,s_nplayers?ST_OK:ST_FAIL,s_nplayers);
+    if(s_nplayers){ step(STEP_GPU,ST_SKIP,0); return; }
+    step(STEP_GPU,ST_RUN,0); g_scan_mb=0;
+    /* nothing in plain memory: read the GPU-mapped heap too (may lower FPS on Eden with Reactive Flushing on) */
+    t0=nn_os_GetSystemTick(); empty=0; s_nap_p=0; s_gpu_p=1;
+    scan_players(1,&empty);
+    if(!s_nplayers) s_gpu_p=0;
+    aden_log("search (DeviceShared heap): %d players, %d empty slots, %d other pocket matches, %lu ms (%u MB read, %lu ms napping)", s_nplayers, empty, s_ncand, (nn_os_GetSystemTick()-t0)/19200, g_scan_mb, s_nap_p/19200);
+    step(STEP_GPU,s_nplayers?ST_OK:ST_FAIL,s_nplayers);
+}
 static void find_thread(void* arg){
     (void)arg;
     for(int i=0;i<STEP_ISLAND;i++) step(i,ST_WAIT,0);
     g_scan_mb=0; step(STEP_MEM,ST_RUN,0);
     s_ncopies=0; s_ncand=0; s_nplayers=0; s_active=0;
-    int empty=0; u64 t0=nn_os_GetSystemTick(); s_attr_rej=0; memset(s_skip_mb,0,sizeof s_skip_mb); memset(s_skip_n,0,sizeof s_skip_n);
-    scan_players(0,&empty);
-    aden_log("search: %d players, %d empty slots, %d other pocket matches, %lu ms", s_nplayers, empty, s_ncand, (nn_os_GetSystemTick()-t0)/19200);
-    if(s_attr_rej) aden_log("search: %d pockets skipped for memory attributes (last attr %x)", s_attr_rej, s_attr_last);
-    for(int i=0;i<8;i++) if(s_skip_n[i]) aden_log("search: skipped heap with attr %x: %d regions, %lu MB", i, s_skip_n[i], s_skip_mb[i]>>20);
-    step(STEP_MEM,s_nplayers?ST_OK:ST_FAIL,s_nplayers);
-    if(s_nplayers) step(STEP_GPU,ST_SKIP,0);
-    else {
-        step(STEP_GPU,ST_RUN,0); g_scan_mb=0;
-        /* nothing in plain memory: read the GPU-mapped heap too (may lower FPS on Eden with Reactive Flushing on) */
-        t0=nn_os_GetSystemTick(); empty=0;
-        scan_players(1,&empty);
-        aden_log("search (DeviceShared heap): %d players, %d empty slots, %d other pocket matches, %lu ms", s_nplayers, empty, s_ncand, (nn_os_GetSystemTick()-t0)/19200);
-        step(STEP_GPU,s_nplayers?ST_OK:ST_FAIL,s_nplayers);
+    u64 t0=nn_os_GetSystemTick(); s_attr_rej=0; s_gpu_rej=0; s_gpu_p=0; memset(s_skip_mb,0,sizeof s_skip_mb); memset(s_skip_n,0,sizeof s_skip_n);
+    int full=__atomic_exchange_n(&s_full,0,__ATOMIC_SEQ_CST);
+    if(!full && hint_players()){
+        aden_log("search: %d players at the last search's offsets, %lu ms", s_nplayers, (nn_os_GetSystemTick()-t0)/19200);
+        step(STEP_MEM,ST_OK,s_nplayers); step(STEP_GPU,ST_SKIP,0);
+    } else {
+        scan_all_players(t0);
+        if(s_nplayers) hint_players_save();
     }
     step(STEP_STATS,ST_RUN,0); step(STEP_PERS,ST_RUN,0);
     if(s_nplayers){
@@ -250,6 +332,13 @@ void aden_player_find(void){
     if(nn_os_CreateThread(&s_th,find_thread,0,s_stack,sizeof s_stack,SEARCH_PRIO)){ g_player_state=3; aden_log("could not start search thread"); return; }
     s_th_used=1;
     nn_os_StartThread(&s_th);
+}
+/* "search again" by hand: scan the heap even if the remembered offsets still match
+   (they may miss a resident or a copy that is new since then) */
+void aden_player_find_full(void){
+    if(g_player_state==1||g_player_state==2) return;
+    __atomic_store_n(&s_full,1,__ATOMIC_SEQ_CST); __atomic_store_n(&s_full_isl,1,__ATOMIC_SEQ_CST);
+    aden_player_find();
 }
 /* re-check cached copies (memory can move after loading screens). One bad copy means the
    others may be old save buffers too: stop writing at once and, if it lasts (not just a
@@ -333,7 +422,6 @@ int aden_pocket_free(void){
    same layout as the file on disk, so NHSE's 3.0 offsets apply directly.
    P (our pocket anchor) sits at PERS_P inside the personal save.
    ===================================================================== */
-#define PERS_SIZE    0x74A40
 #define PERS_ID      0xC248     /* TownId{u32,u16[10]} then PlayerId at +0x1C{u32,u16[10]} */
 #define PERS_MILES   0x12718
 #define PERS_RECIPES 0x6528C    /* 4 x 0x100-byte bit arrays: known, made, new, favourite */
@@ -353,15 +441,16 @@ extern const VName g_vnames[]; extern const int g_nvnames;
 
 static int pers_ok(void){ return g_player_state==2 && s_npb; }   /* personal bases only hold while the player data is ready */
 
-static int range_chk(uptr a, uptr len, int heap_only){
-    /* every page in [a, a+len) must be plain read/write memory (and game heap if heap_only) */
+static int range_chk(uptr a, uptr len, int mode){
+    /* every page in [a, a+len) must be read/write memory that is not Locked (and game heap / not DeviceShared, see RC_*) */
     uptr e=a+len;
     while(a<e){ MemoryInfo mi; u32 pi; if(svcQueryMemory(&mi,&pi,a) || mi.size==0) return 0;
-        if((mi.perm&3)!=3 || mi.type==0 || !MI_RW(mi) || (heap_only && mi.type!=5)) return 0; a=mi.addr+mi.size; }
+        if((mi.perm&3)!=3 || mi.type==0 || !MI_RW(mi) || ((mode&RC_HEAP) && mi.type!=5) || ((mode&RC_PLAIN) && !MI_PLAIN(mi))) return 0;
+        a=mi.addr+mi.size; }
     return 1;
 }
 static int range_rw(uptr a, uptr len){ return range_chk(a,len,0); }
-static int heap_rw(uptr a, uptr len){ return range_chk(a,len,1); }
+static int heap_rw(uptr a, uptr len){ return range_chk(a,len,RC_HEAP); }
 static void find_personal_bases(void){
     s_npb=0;
     for(int i=0;i<s_fields[0].n && s_npb<MAXF;i++){
@@ -376,7 +465,7 @@ static int kabu_ok(uptr k){
     return v[15]<4;
 }
 /* taken from s_pb[0] by the render thread before the island thread starts: the player search may rewrite s_pb meanwhile */
-static u32 s_town[6], s_ph[4];
+static u32 s_town[6], s_ph[4]; static uptr s_near; static int s_isl_full;
 static void island_drop(void){
     /* drop the island result, or mark a running search obsolete: it then ends in state 0 and
        the next aden_island_find starts again. A flag set just after the thread checked it is
@@ -401,51 +490,94 @@ static int main_ok(uptr M, int k, const u8* town, const u32* ph, int need_hdr){
     if(*(u32*)(M+MAIN_KABU)==0 && *(u32*)(M+MAIN_KABU+4)==0) return 0;
     return 1;
 }
-static void find_main(void){
+/* island thread only: what a town-id hit may be (memory j<s_nj of villager k<s_nk), see find_main */
+static int s_need_hdr, s_nk, s_nj;
+static void log_main(int n, uptr M, const char* how){
+    const u8* h=(const u8*)M;
+    aden_log("island save %d at %lx (%s), header %02x%02x%02x%02x %02x%02x%02x%02x, turnips buy %u", n, M, how, h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7], *(u32*)(M+MAIN_KABU));
+}
+/* adds the island saves whose town-id hits lie in [lo, hi) to mb (up to 4, no duplicates) */
+static void scan_main(uptr lo, uptr hi, int dev, uptr* mb, int* nmb, int* hits){
     const u8* town=(const u8*)s_town; u32 tid=s_town[0];
+    uptr a=lo; MemoryInfo mi; u32 pi;
+    while(a<hi && *nmb<4){
+        if(svcQueryMemory(&mi,&pi,a)||mi.size==0) break;
+        uptr end=mi.addr+mi.size; if(end>hi) end=hi;
+        /* only ordinary game heap (type 5), same as the player search; other memory
+           (graphics, shared, transfer buffers) can disappear under us */
+        if(scan_ok(&mi,dev)){
+            for(uptr x=ALIGN_UP(a,4); x+24<=end; x+=4){
+                if(!(x&(SCAN_CHUNK-1))){ g_scan_mb+=SCAN_CHUNK>>20; if(!scan_nap(x,&end,dev,&s_nap_i) || x+24>end) break; }
+                if(*(u32*)x!=tid || memcmp((void*)x,town,24)) continue;
+                (*hits)++;
+                for(int k=0;k<s_nk && *nmb<4;k++) for(int j=0;j<s_nj && *nmb<4;j++){
+                    uptr M=x-(MAIN_VILL+4+(uptr)k*VILL_SIZE+(uptr)j*MEM_SIZE);
+                    int dup=0; for(int i=0;i<*nmb;i++) if(mb[i]==M) dup=1; if(dup) continue;
+                    if(!main_ok(M,k,town,s_ph,s_need_hdr)) continue;
+                    mb[(*nmb)++]=M;
+                    char how[32]; aden_snprintf(how,sizeof how,"villager %d memory %d",k,j);
+                    log_main(*nmb,M,how);
+                }
+                if(*nmb>=4) break;
+            }
+        }
+        a=end;
+    }
+}
+/* the remembered island saves, if every one of them still passes the scan's checks */
+static int hint_island(uptr* mb){
+    HintIsland* h=&s_hi; uptr hb=heap_base(); const u8* town=(const u8*)s_town;
+    if(!hb || !hint_read(HINT_ISLAND,h,sizeof *h) || !h->n || h->n>4) return 0;
+    for(u32 i=0;i<h->n;i++){
+        uptr M=hb+h->off[i]; int ok=0;
+        if(!range_chk(M,MAIN_SIZE,RC_HEAP|RC_PLAIN)) goto miss;
+        for(int k=0;k<s_nk && !ok;k++) for(int j=0;j<s_nj && !ok;j++)
+            if(!memcmp((void*)(M+MAIN_VILL+4+(uptr)k*VILL_SIZE+(uptr)j*MEM_SIZE),town,24) && main_ok(M,k,town,s_ph,s_need_hdr)) ok=1;
+        if(!ok) goto miss;
+        mb[i]=M; log_main(i+1,M,"last search's offset");
+    }
+    return h->n;
+miss:
+    aden_log("island search: the last search's offsets do not match");
+    return 0;
+}
+static void hint_island_save(const uptr* mb, int nmb){
+    HintIsland* h=&s_hi; uptr hb=heap_base(); if(!hb) return;
+    memset(h,0,sizeof *h); h->n=nmb;
+    for(int i=0;i<nmb;i++) h->off[i]=mb[i]-hb;
+    hint_write(HINT_ISLAND,h,sizeof *h);
+}
+/* the island saves sit next to the personal saves (Eden 3.0.3: 23 MB below them), so the
+   search reads this much on each side of the personal save before the whole heap */
+#define NEAR_SPAN 0x4000000
+static void find_main(void){
     uptr mb[4]; int nmb=0;
     /* if the personal save carries the 3.0 file header, the island save must too */
     const u32* ph=s_ph;
-    int need_hdr = ph[0]==0xA0002 && ph[1]==0xA0028;
+    s_need_hdr = ph[0]==0xA0002 && ph[1]==0xA0028;
     /* a town-id hit is memory j of villager k: any villager that has met a resident holds one.
        Villager 0 alone is not enough: after it moves out its slot is empty (species 35, memories
        zeroed), and a newcomer has no memory until the player talks to it. Without the header
        check, a shifted base is too easy to accept: keep villager 0, memory 0 there. */
-    int nk = need_hdr ? VILL_N : 1, nj = need_hdr ? 8 : 1;
-    aden_log("personal header %x %x %x %x -> %s", ph[0],ph[1],ph[2],ph[3], need_hdr?"using header check":"no header, using layout check");
-    int hits=0; u64 t0=nn_os_GetSystemTick();
-    /* plain heap first, then the DeviceShared heap if no island save was found (as in the player search) */
-    for(int dev=0; dev<2 && !nmb; dev++){
-        uptr a=0; MemoryInfo mi; u32 pi;
-        while(a<0x8000000000ul && nmb<4){
-            if(svcQueryMemory(&mi,&pi,a)||mi.size==0) break;
-            uptr end=mi.addr+mi.size;
-            /* only ordinary game heap (type 5), same as the player search; other memory
-               (graphics, shared, transfer buffers) can disappear under us */
-            if(scan_ok(&mi,dev)){
-                for(uptr x=mi.addr; x+24<=end; x+=4){
-                    if(!(x&(SCAN_CHUNK-1))){ g_scan_mb+=SCAN_CHUNK>>20; if(!scan_nap(x,&end,dev) || x+24>end) break; }
-                    if(*(u32*)x!=tid || memcmp((void*)x,town,24)) continue;
-                    hits++;
-                    for(int k=0;k<nk && nmb<4;k++) for(int j=0;j<nj && nmb<4;j++){
-                        uptr M=x-(MAIN_VILL+4+(uptr)k*VILL_SIZE+(uptr)j*MEM_SIZE);
-                        int dup=0; for(int i=0;i<nmb;i++) if(mb[i]==M) dup=1; if(dup) continue;
-                        if(!main_ok(M,k,town,ph,need_hdr)) continue;
-                        mb[nmb++]=M;
-                        const u8* h=(const u8*)M;
-                        aden_log("island save %d at %lx (villager %d memory %d), header %02x%02x%02x%02x %02x%02x%02x%02x, turnips buy %u", nmb, M, k, j, h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7], *(u32*)(M+MAIN_KABU));
-                    }
-                    if(nmb>=4) break;
-                }
-            }
-            a=end;
-        }
+    s_nk = s_need_hdr ? VILL_N : 1; s_nj = s_need_hdr ? 8 : 1;
+    aden_log("personal header %x %x %x %x -> %s", ph[0],ph[1],ph[2],ph[3], s_need_hdr?"using header check":"no header, using layout check");
+    int hits=0; u64 t0=nn_os_GetSystemTick(); s_nap_i=0; s_gpu_i=0; u32 rej0=s_gpu_rej;
+    const char* how="last search's offsets";
+    int hinted= !s_isl_full && (nmb=hint_island(mb))>0;
+    if(!hinted){
+        /* near the personal save first (plain heap only), then the plain heap, then the
+           DeviceShared heap if no island save was found (as in the player search) */
+        how="near the personal save";
+        if(!s_isl_full && s_near>NEAR_SPAN) scan_main(s_near-NEAR_SPAN,s_near+NEAR_SPAN,0,mb,&nmb,&hits);
+        for(int dev=0; dev<2 && !nmb; dev++){ how= dev ? "DeviceShared heap" : "whole heap"; s_gpu_i=dev; scan_main(0,0x8000000000ul,dev,mb,&nmb,&hits); }
+        if(!nmb) s_gpu_i=0;
     }
     step(STEP_ISLAND,nmb?ST_OK:ST_FAIL,nmb);
-    aden_log("island search: %d town-id hits, %d saves, %lu ms", hits, nmb, (nn_os_GetSystemTick()-t0)/19200);
+    aden_log("island search (%s): %d town-id hits, %d saves, %lu ms (%u MB read, %lu ms napping, %u reads of GPU-mapped pages avoided)", how, hits, nmb, (nn_os_GetSystemTick()-t0)/19200, g_scan_mb, s_nap_i/19200, s_gpu_rej-rej0);
     /* the render thread leaves s_mb alone while we run, so we are its only writer here */
     int st = nmb ? 2 : 3;
     if(__atomic_exchange_n(&s_island_stale,0,__ATOMIC_SEQ_CST)){ aden_log("island search obsolete, dropped"); nmb=0; st=0; }
+    else if(nmb && !hinted) hint_island_save(mb,nmb);
     for(int i=0;i<nmb;i++) s_mb[i]=mb[i];
     s_nmb=nmb; __atomic_store_n(&g_island_state,st,__ATOMIC_RELEASE);
 }
@@ -459,7 +591,8 @@ void aden_island_find(void){
     if(__atomic_load_n(&s_th2_run,__ATOMIC_ACQUIRE)) return;
     if(s_th2_used){ nn_os_WaitThread(&s_th2); nn_os_DestroyThread(&s_th2); s_th2_used=0; }
     if(!pers_ok() || !range_rw(s_pb[0],16) || !range_rw(s_pb[0]+PERS_ID,24)){ step(STEP_ISLAND,ST_FAIL,0); s_nmb=0; g_island_state=3; return; }
-    memcpy(s_town,(const void*)(s_pb[0]+PERS_ID),24); memcpy(s_ph,(const void*)s_pb[0],16);
+    memcpy(s_town,(const void*)(s_pb[0]+PERS_ID),24); memcpy(s_ph,(const void*)s_pb[0],16); s_near=s_pb[0];
+    s_isl_full=__atomic_exchange_n(&s_full_isl,0,__ATOMIC_SEQ_CST);
     if(!s_town[0]){ aden_log("no town id"); step(STEP_ISLAND,ST_FAIL,0); s_nmb=0; g_island_state=3; return; }
     g_scan_mb=0; step(STEP_ISLAND,ST_RUN,0);
     __atomic_store_n(&s_island_stale,0,__ATOMIC_SEQ_CST);

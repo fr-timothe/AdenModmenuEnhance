@@ -35,7 +35,8 @@ CONTROLS (menu open)
           so a failed read shows up right away (X goes on without the island data).
   Player: Up/Down picks a row (resident, money, unlocks), Left/Right an entry in it.
           On money: ZL/ZR big step, X max, Y zero, A opens the digits (Left/Right pick a
-          digit, Up/Down change it, A or B done). Minus searches your player data again.
+          digit, Up/Down change it, A or B done). Minus searches your player data again
+          over the whole memory (use it after a new resident moves in).
           Limits: wallet 99,999 Bells, Nook Miles 9,999,999, bank 999,999,999, Poki 9,999,999.
   Island: Left/Right picks the sell or buy price, Down goes to the villagers. Prices: -/+ 10,
           ZL/ZR 100, X best natural price, Y zero. Villager: A best friend, Y reset, X moving out.

@@ -51,6 +51,7 @@ Aden Modmenu Enhance starts from [AdenDev's Aden Modmenu](https://github.com/Dev
 - `Built-in Stack 99` switch, and `Remove every weed` on the island
 - `Loading page` that shows each step of the player and island searches
 - `Sturdier memory search`: upgraded pockets, every save copy kept in sync, searches that never block the game
+- `Fast menu loading`: the save locations are remembered between game starts, so the menu loads in under a second after the first search
 - `Release zip` you drag into the Eden folder, built and published by GitHub Actions
 
 ## Screenshots
@@ -125,6 +126,8 @@ Aden Modmenu Enhance starts from [AdenDev's Aden Modmenu](https://github.com/Dev
   <summary>Under the hood</summary>
 
 - `Loading page` that shows each place the player and island searches look, and what they found
+- `Remembered save locations` in `sdmc/aden/hint_player.bin` and `hint_island.bin`: checked like a full search, and a full search runs again if they no longer match
+- `No reads of GPU-mapped memory` while searching, which kept FPS lower on Eden until a restart
 - `Hook points found by fingerprint`, so a game update does not break the mod right away
 - `Log file` at `sdmc/aden/log.txt` for bug reports
 - `Custom animated "A" app icon` on the Nook Phone
@@ -167,7 +170,8 @@ The mod is a `subsdk9` module loaded next to the game. At start-up it:
 3. takes over phone app slot 16 (`src/phone.c`), draws its UI with the game's own debug text
    and primitive renderers (`src/gfx.c`, `src/menu.c`) and reads the controller (`src/input.c`);
 4. edits the live save data in memory, using the save layout documented by NHSE
-   (`src/player.c`);
+   (`src/player.c`). The first search scans the heap; the save locations it finds are
+   stored relative to the heap start, so later game starts find them at once;
 5. serves replacement game files from the SD card (`src/romfs.c`), which also powers the mod manager.
 
 It's plain C with no devkitPro or libnx: the SDK functions it needs are imported by name

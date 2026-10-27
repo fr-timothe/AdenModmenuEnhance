@@ -9,7 +9,7 @@ static int s_hl_row=-1, s_hl_key=-1;   /* highlight pill: content row, keyboard 
 static void (*s_paint)(void);           /* the tab's shapes, drawn over the panel and under the text */
 static int s_status_row;                /* where the status line goes this frame */
 u64  aden_input_take(void);
-int aden_player_ready(void); int aden_player_copies(void); void aden_player_find(void);
+int aden_player_ready(void); int aden_player_copies(void); void aden_player_find(void); void aden_player_find_full(void);
 int aden_stat_ok(int); u32 aden_stat_get(int); void aden_stat_set(int,u32);
 void aden_player_names(char*,char*,int);
 int aden_player_count(void); int aden_player_active(void); const char* aden_player_name(int); void aden_player_select(int);
@@ -749,8 +749,8 @@ static void tab_player(void){
     if(g_player_state==0) aden_player_find();
     if(loading_page(0)){ s_pedit=0; return; }
     if(!aden_player_ready()){ text(ROW0+2,C_DIM,"Finding your player data..."); s_pedit=0; return; }
-    /* Minus redoes the player search (not while the island thread reads the copies) */
-    if(!s_pedit && pr(B_MINUS) && g_island_state!=1){ s_status[0]=0; g_player_state=0; g_island_state=0; aden_player_find(); return; }
+    /* Minus redoes the player search over the whole heap (not while the island thread reads the copies) */
+    if(!s_pedit && pr(B_MINUS) && g_island_state!=1){ s_status[0]=0; g_player_state=0; g_island_state=0; aden_player_find_full(); return; }
     P.np=aden_player_count(); P.ap=aden_player_active();
     for(int k=0;k<4;k++){ P.ok[k]=cur_ok(k); P.v[k]=P.ok[k]?cur_get(k):0; }
     int minz= P.np>1 ? Z_WHO : Z_MONEY;

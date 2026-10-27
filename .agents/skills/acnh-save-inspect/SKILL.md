@@ -47,3 +47,15 @@ Facts seen in a 3.0 save (Oct 2026):
 - Empty villager slot: species byte 35, all memories zeroed.
 - A villager the player has not talked to yet has no memory of the player (no town id
   at `V+4`), even though it lives on the island.
+
+In-memory layout seen on Eden 3.0.3 (beta.17 log, Oct 2026):
+- 2 personal copies back to back (0x74A60 apart: save size + 0x20 heap header), 2 island
+  copies back to back, about 23 MB below the personal ones. Every base was 16-aligned and
+  carried the file header.
+- Full heap scans took 40 s (player, stride 8) and 53 s (island, stride 4); about half of
+  that was likely naps (estimate, not measured). Newer builds log `MB read` and `ms napping`.
+- beta.18 log with search timings: player scan 32 s for 2568 MB with only 1.4 s napping
+  (the reading itself is the cost); island search near the personal save 2.5 s for 116 MB.
+- Across two boots the absolute addresses moved (+8 MB) but the offsets from the heap start
+  (svcGetInfo 4) stayed the same: the remembered offsets (`sdmc/aden/hint_*.bin`) loaded the
+  player in 7 ms and the island in 18 ms.
