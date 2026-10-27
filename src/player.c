@@ -383,12 +383,34 @@ static void island_drop(void){
     __atomic_store_n(&s_island_stale,1,__ATOMIC_SEQ_CST);
     if(!__atomic_load_n(&s_th2_run,__ATOMIC_SEQ_CST)){ s_nmb=0; g_island_state=0; }
 }
+/* is M the start of an island save whose villager k holds the town id hit? need_hdr: it must
+   carry the personal save's 3.0 file header (the other save files carry it too) */
+static int main_ok(uptr M, int k, const u8* town, const u32* ph, int need_hdr){
+    if(need_hdr){ if(!heap_rw(M,16)) return 0; const u32* h=(const u32*)M; if(h[0]!=ph[0]||h[1]!=ph[1]||h[3]!=ph[3]) return 0; }
+    if(!heap_rw(M,MAIN_SIZE)) return 0;
+    u8 sp=*(u8*)(M+MAIN_VILL);
+    if(sp>35 || !kabu_ok(M+MAIN_KABU)) return 0;
+    if(*(u8*)(M+MAIN_VILL+(uptr)k*VILL_SIZE)>=35) return 0;   /* a villager with a memory lives there */
+    if(need_hdr) return 1;
+    /* no header: the slot before villager 0 must not look like a villager,
+       and villager 0's own record must start with a valid species/variant */
+    uptr prev=M+MAIN_VILL-VILL_SIZE+4;
+    if(heap_rw(prev,24) && memcmp((void*)prev,town,24)==0) return 0;
+    if(*(u8*)(M+MAIN_VILL+1)>40) return 0;
+    if(*(u32*)(M+MAIN_KABU)==0 && *(u32*)(M+MAIN_KABU+4)==0) return 0;
+    return 1;
+}
 static void find_main(void){
     const u8* town=(const u8*)s_town; u32 tid=s_town[0];
     uptr mb[4]; int nmb=0;
     /* if the personal save carries the 3.0 file header, the island save must too */
     const u32* ph=s_ph;
     int need_hdr = ph[0]==0xA0002 && ph[1]==0xA0028;
+    /* a town-id hit is memory j of villager k: any villager that has met a resident holds one.
+       Villager 0 alone is not enough: after it moves out its slot is empty (species 35, memories
+       zeroed), and a newcomer has no memory until the player talks to it. Without the header
+       check, a shifted base is too easy to accept: keep villager 0, memory 0 there. */
+    int nk = need_hdr ? VILL_N : 1, nj = need_hdr ? 8 : 1;
     aden_log("personal header %x %x %x %x -> %s", ph[0],ph[1],ph[2],ph[3], need_hdr?"using header check":"no header, using layout check");
     int hits=0; u64 t0=nn_os_GetSystemTick();
     /* plain heap first, then the DeviceShared heap if no island save was found (as in the player search) */
@@ -404,23 +426,14 @@ static void find_main(void){
                     if(!(x&(SCAN_CHUNK-1))){ g_scan_mb+=SCAN_CHUNK>>20; if(!scan_nap(x,&end,dev) || x+24>end) break; }
                     if(*(u32*)x!=tid || memcmp((void*)x,town,24)) continue;
                     hits++;
-                    uptr M=x-(MAIN_VILL+4);
-                    if(!heap_rw(M,MAIN_SIZE)) continue;
-                    u8 sp=*(u8*)(M+MAIN_VILL);
-                    if(sp>35 || !kabu_ok(M+MAIN_KABU)) continue;
-                    if(need_hdr){ const u32* h=(const u32*)M; if(h[0]!=ph[0]||h[1]!=ph[1]||h[3]!=ph[3]) continue; }
-                    else {
-                        /* no header: the slot before villager 0 must not look like a villager,
-                           and villager 0's own record must start with a valid species/variant */
-                        uptr prev=M+MAIN_VILL-VILL_SIZE+4;
-                        if(heap_rw(prev,24) && memcmp((void*)prev,town,24)==0) continue;
-                        if(*(u8*)(M+MAIN_VILL+1)>40) continue;
-                        if(*(u32*)(M+MAIN_KABU)==0 && *(u32*)(M+MAIN_KABU+4)==0) continue;
+                    for(int k=0;k<nk && nmb<4;k++) for(int j=0;j<nj && nmb<4;j++){
+                        uptr M=x-(MAIN_VILL+4+(uptr)k*VILL_SIZE+(uptr)j*MEM_SIZE);
+                        int dup=0; for(int i=0;i<nmb;i++) if(mb[i]==M) dup=1; if(dup) continue;
+                        if(!main_ok(M,k,town,ph,need_hdr)) continue;
+                        mb[nmb++]=M;
+                        const u8* h=(const u8*)M;
+                        aden_log("island save %d at %lx (villager %d memory %d), header %02x%02x%02x%02x %02x%02x%02x%02x, turnips buy %u", nmb, M, k, j, h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7], *(u32*)(M+MAIN_KABU));
                     }
-                    int dup=0; for(int j=0;j<nmb;j++) if(mb[j]==M) dup=1; if(dup) continue;
-                    mb[nmb++]=M;
-                    const u8* h=(const u8*)M;
-                    aden_log("island save %d at %lx, header %02x%02x%02x%02x %02x%02x%02x%02x, turnips buy %u", nmb, M, h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7], *(u32*)(M+MAIN_KABU));
                     if(nmb>=4) break;
                 }
             }
