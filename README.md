@@ -89,7 +89,7 @@ Aden Modmenu Enhance starts from [AdenDev's Aden Modmenu](https://github.com/Dev
 - `The game's own item icons` in a pocket-style grid of 5 x 4 tiles a page (game 3.0.3; A on the About tab's Info page turns them off)
 - `Family filter` on ZL/ZR: Furniture, Clothing, Nature, Materials, Other
 - `Give sheet`: A on a tile opens it, with the amount (back to 1 each time it opens), the destination and the item's options
-- `Colours and variants`: a clothing item is one tile, its colours are picked in the sheet; furniture and tools pick their remake variant (body and pattern)
+- `Colours and variants`: a clothing item is one tile; the sheet shows its colours, or a furniture or tool item's remake variants (body, pattern), as a grid of tiles with their icons
 - `Spawn into pockets or home storage`, up to 40 full stacks of a stackable item
 - `Owned DLC only`: Happy Home Paradise, Pocket Camp and Switch Online items are listed only if you own them
 - `Safe by default`: items that need a recipe ID (DIY cards, message bottles) are refused instead of spawned broken
@@ -136,7 +136,7 @@ Aden Modmenu Enhance starts from [AdenDev's Aden Modmenu](https://github.com/Dev
 |---|---|
 | Everywhere | `L` / `R` switch tab, `B` close the menu |
 | Items | D-pad move, `ZL`/`ZR` family, `Y` search, `A` open the give sheet |
-| Give sheet | `Up`/`Down` option, `Left`/`Right` change it (colour, variant, amount, pockets or storage), `-`/`+` 1, `ZL`/`ZR` 10, `X` max, `Y` back to 1, `A` give, `B` back to the grid |
+| Give sheet | D-pad picks a colour or variant tile, `ZL`/`ZR` body or pattern; `Down` to the amount (`Left`/`Right` 1, `ZL`/`ZR` 10) and the destination (`Left`/`Right`); anywhere `-`/`+` 1, `X` max, `Y` back to 1, `A` give, `B` back to the grid |
 | Player | `Up`/`Down` zone, `Left`/`Right` entry, `A` digits or learn, `ZL`/`ZR` big step, `X` max, `Y` zero, `-` search again |
 | Island | `Left`/`Right` sell or buy, `-`/`+` 10, `ZL`/`ZR` 100, `X` best price, `Y` zero; on a villager `A` best friend, `Y` reset, `X` moving out; on Weeds `A` remove them all |
 | Mods | D-pad move, `ZL`/`ZR` page, `A` on/off, `-` undo, `Y` rescan |

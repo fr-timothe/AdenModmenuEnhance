@@ -85,6 +85,11 @@ static void at(int row,int col,u32 c,const char* f,...){
     char b[CVW+1]; __builtin_va_list ap; __builtin_va_start(ap,f); aden_vsnprintf(b,sizeof b,f,ap); __builtin_va_end(ap);
     at_s(row,col,c,b);
 }
+/* the same, returning its length */
+static int at_n(int row,int col,u32 c,const char* f,...){
+    char b[CVW+1]; __builtin_va_list ap; __builtin_va_start(ap,f); aden_vsnprintf(b,sizeof b,f,ap); __builtin_va_end(ap);
+    at_s(row,col,c,b); return (int)strlen(b);
+}
 /* the same, ending at column `end` (right-aligned) */
 static void at_r(int row,int end,u32 c,const char* f,...){
     char b[CVW+1]; __builtin_va_list ap; __builtin_va_start(ap,f); aden_vsnprintf(b,sizeof b,f,ap); __builtin_va_end(ap);
@@ -286,7 +291,15 @@ static int s_was_open, s_armed;
 #define GROWS 4
 #define GPAGE (GCOLS*GROWS)
 #define GLINE 11                   /* label characters per line (tile width / 8) */
+/* grid geometry, panel coordinates (x right from PX0, y down from PY0) */
+#define GX0   40.f
+#define GY0   152.f
+#define GTILE 90.f
+#define GPITCH 100.f        /* 5 label lines of 20 px: one print per column lines up with every row */
 static int s_grid_on, s_grid_n, s_grid_sel, s_grid_fam[GPAGE], s_grid_nv[GPAGE];
+/* the item grid has the search bar (s_grid_bar); the give sheet's variant grid sits lower (s_grid_y0)
+   and marks the picked tile in teal while the cursor is in another zone (s_grid_cur 0) */
+static int s_grid_bar, s_grid_cur=1; static float s_grid_y0, s_pill_top; static u16 s_grid_var[GPAGE];
 static u16 s_grid_id[GPAGE]; static char s_grid_fc[GPAGE];
 void aden_icons_want(int n,const u16* ids,const char* fams,const u16* vars); int aden_icon_draw(u16 id,char fam,u16 var,float x,float y,float w,float h,int mode);
 int aden_icons_on(void); int aden_icon_mode(void); void aden_icon_mode_set(int); void aden_icons_enable(void); void aden_icons_disable(void);
@@ -300,7 +313,15 @@ static int icon_at(u16 id,char fam,u16 var,float x,float y,float w,float h,int m
     s_iq[s_niq++]=(IconQ){id,var,fam,(s8)mode,x,y,w,h}; return 1;
 }
 static char s_glab[GCOLS][GROWS*(2*GLINE+8)+1];
-static char s_famtxt[24];
+static char s_famtxt[24];   /* text of the teal pill right of the bar (empty: no pill) */
+/* tile labels, two lines each: one print per column, 5 lines (100 px) per tile row */
+static void grid_labels(char la[][GLINE+1],char lb[][GLINE+1]){
+    for(int c=0;c<GCOLS;c++){
+        char* o=s_glab[c]; int n=0, cap=(int)sizeof s_glab[c];
+        for(int r=0;r<GROWS;r++){ int i=r*GCOLS+c;
+            n+=aden_snprintf(o+n,cap-n,"%s\n%s\n\n\n\n", i<s_grid_n?la[i]:"", i<s_grid_n?lb[i]:""); }
+    }
+}
 /* copy at most GLINE characters, ending with '.' when the text is cut */
 static void fit(char* o,const char* s,int n){
     int k=0; for(;k<n && k<GLINE;k++) o[k]=s[k];
@@ -427,20 +448,30 @@ static void meter(float x,float y,float w,float h,float f,u32 c){
     if(f>0){ float fw=w*f; if(fw<h) fw=h; box(x,y,fw,h,h*0.5f,c); }
 }
 
-/* ---------- give sheet: the chosen item, its colour or variants, the amount, where it goes ---------- */
-enum { O_COLOR, O_BODY, O_FAB, O_QTY, O_DEST };
-static struct { int opt[5], no, nb, nf, mx, fi; u16 id, var; char fam; } SH;
+/* ---------- give sheet: the item's colours or variants as a grid, the amount, where it goes ----------
+   Up/Down moves between zones: the variant grid (when the item has colours or variants), the
+   amount and the destination. The tile picked in the grid is what A gives. An item with both a
+   body and a pattern shows one of the two sets at a time (ZL/ZR). */
+enum { SET_COLOR, SET_BODY, SET_FAB };
+enum { SZ_GRID, SZ_QTY, SZ_DEST };
+static struct { int set[2], nset, n, pick, mx, fi; u16 id, var; char fam; } SH;
+static int s_sh_set;
 static void sheet_open(int i){
-    s_sheet=1; s_sh_item=i; s_sh_col=s_sh_body=s_sh_fab=s_sh_row=0; s_qty=1; s_status[0]=0;
+    s_sheet=1; s_sh_item=i; s_sh_col=s_sh_body=s_sh_fab=s_sh_set=0; s_sh_row=-1; s_qty=1; s_status[0]=0;
 }
 static void sheet_close(void){ s_sheet=0; s_qty=1; }
-#define SH_ROW(k) (7+2*(k))   /* text row of option k */
-#define SH_GIVE   18          /* text row of the give button */
+#define SH_GY0   252.f   /* top of the variant grid (panel y) */
+#define SH_SET   5       /* text row above the grid: the set and the picked variant */
+#define SH_QTY   17      /* text rows of the amount, the destination and the give button */
+#define SH_DEST  19
+#define SH_GIVE  21
 static void paint_sheet(void){
-    box(20,108,530,128,24,C_WHITE);
-    box(36,122,100,100,20,C_WELL);
-    if(!icon_at(SH.id,SH.fam,SH.var,WX(42),WY(128),88,88,aden_icon_mode())) dot(86,172,26,FAMCOL[SH.fi]);
-    for(int k=0;k<SH.no;k++) box(20,GY(SH_ROW(k))-10,530,36,18,k==s_sh_row?C_PILL:C_WELL);
+    box(20,108,530,92,22,C_WHITE);
+    box(32,116,76,76,18,C_WELL);
+    if(!icon_at(SH.id,SH.fam,SH.var,WX(38),WY(122),64,64,aden_icon_mode())) dot(70,154,20,FAMCOL[SH.fi]);
+    if(!SH.nset) box(20,252,530,190,22,C_WELL);
+    box(20,GY(SH_QTY)-10,530,36,18,s_sh_row==SZ_QTY?C_PILL:C_WELL);
+    box(20,GY(SH_DEST)-10,530,36,18,s_sh_row==SZ_DEST?C_PILL:C_WELL);
     box(20,GY(SH_GIVE)-10,530,36,18,C_HEAD);
 }
 static void give(const Item* it,u16 var,int q,const char* what){
@@ -455,92 +486,135 @@ static void give(const Item* it,u16 var,int q,const char* what){
     else if(r<q) aden_snprintf(s_status,sizeof s_status,"Added %d x %s (pockets now full)",r,what);
     else aden_snprintf(s_status,sizeof s_status,"Added %d x %s to your pockets",r,what);
 }
-/* what the current options pick: the item (colour), its variant count field, the option rows */
+/* the colour of a clothing item, from its name "base (Colour)"; the whole name if it has none */
+static void color_of(const Item* it,char* o,int cap){
+    const char* c=it->name+base_len(it); int m=(int)strlen(c);
+    if(m>3){ c+=2; m-=3; } else { c=it->name; m=(int)strlen(c); }
+    if(m>cap-1) m=cap-1;
+    memcpy(o,c,m); o[m]=0;
+}
+/* what the sheet picks now: the item (colour), its variant count field, the sets shown */
 static Item* sheet_pick(void){
     Item* L=&s_items[s_sh_item];
     if(s_sh_col>=L->ncol) s_sh_col=0;
     Item* it=L+s_sh_col;
-    SH.nb=vcount(it->body); SH.nf=vcount(it->fab);
-    if(s_sh_body>=SH.nb) s_sh_body=0;
-    if(s_sh_fab>=SH.nf) s_sh_fab=0;
-    SH.no=0;
-    if(L->ncol>1) SH.opt[SH.no++]=O_COLOR;
-    if(SH.nb) SH.opt[SH.no++]=O_BODY;
-    if(SH.nf) SH.opt[SH.no++]=O_FAB;
-    SH.opt[SH.no++]=O_QTY; SH.opt[SH.no++]=O_DEST;
-    if(s_sh_row>=SH.no) s_sh_row=SH.no-1;
+    int nb=vcount(it->body), nf=vcount(it->fab);
+    if(s_sh_body>=nb) s_sh_body=0;
+    if(s_sh_fab>=nf) s_sh_fab=0;
+    SH.nset=0;
+    if(L->ncol>1) SH.set[SH.nset++]=SET_COLOR;
+    if(nb) SH.set[SH.nset++]=SET_BODY;
+    if(nf && SH.nset<2) SH.set[SH.nset++]=SET_FAB;
+    if(s_sh_set>=SH.nset) s_sh_set=0;
+    int s= SH.nset ? SH.set[s_sh_set] : -1;
+    SH.n=    s==SET_COLOR ? L->ncol : s==SET_BODY ? nb : s==SET_FAB ? nf : 0;
+    SH.pick= s==SET_COLOR ? s_sh_col : s==SET_BODY ? s_sh_body : s==SET_FAB ? s_sh_fab : 0;
+    if(s_sh_row<0 || (s_sh_row==SZ_GRID && !SH.nset)) s_sh_row= SH.nset ? SZ_GRID : SZ_QTY;
     /* stackables go up to 40 full slots, the rest to 99 */
     SH.mx= it->stack>1 ? 40*it->stack : 99;
     SH.id=it->id; SH.fam=it->fam; SH.fi=fam_idx(it->fam); SH.var=(u16)(s_sh_body+32*s_sh_fab);
     return it;
 }
+static void sheet_set_pick(int k){
+    int s=SH.set[s_sh_set];
+    if(s==SET_COLOR) s_sh_col=k; else if(s==SET_BODY) s_sh_body=k; else s_sh_fab=k;
+}
 static void sheet(void){
     Item* L=&s_items[s_sh_item]; Item* it=sheet_pick();
     if(pr(B_B)){ sheet_close(); s_press&=~(u64)B_B; return; }   /* B only closes the sheet */
-    if(up() && s_sh_row>0) s_sh_row--;
-    if(down() && s_sh_row<SH.no-1) s_sh_row++;
-    int o=SH.opt[s_sh_row], d=0;
-    if(left()) d--; if(right()) d++;
-    if(d) switch(o){
-        case O_COLOR: s_sh_col=(s_sh_col+L->ncol+d)%L->ncol; break;
-        case O_BODY:  s_sh_body=(s_sh_body+SH.nb+d)%SH.nb; break;
-        case O_FAB:   s_sh_fab=(s_sh_fab+SH.nf+d)%SH.nf; break;
-        case O_QTY:   s_qty+=d; break;
-        case O_DEST:  s_to_storage=!s_to_storage; break;
+    int z=s_sh_row;
+    if(z==SZ_GRID){
+        /* move in the variant grid like in the item grid; down from the last row goes to the amount */
+        int k=SH.pick, n=SH.n;
+        if(left()  && k>0) k--;
+        if(right() && k<n-1) k++;
+        if(up()    && k>=GCOLS) k-=GCOLS;
+        if(down()){ if(k+GCOLS<n) k+=GCOLS; else if(k/GCOLS<(n-1)/GCOLS) k=n-1; else s_sh_row=SZ_QTY; }
+        if(k!=SH.pick) sheet_set_pick(k);
+        if(SH.nset>1 && (pr(B_ZL)||pr(B_ZR))) s_sh_set^=1;
+    } else {
+        if(up()){ if(z==SZ_DEST) s_sh_row=SZ_QTY; else if(SH.nset) s_sh_row=SZ_GRID; }
+        if(down() && z==SZ_QTY) s_sh_row=SZ_DEST;
+        if(z==SZ_QTY){
+            if(left()) s_qty--;
+            if(right()) s_qty++;
+            if(pr(B_ZL)) s_qty=(s_qty-1)/10*10;   /* previous / next ten */
+            if(pr(B_ZR)) s_qty=s_qty/10*10+10;
+        }
+        if(z==SZ_DEST && (left()||right())) s_to_storage=!s_to_storage;
     }
-    /* the amount also answers from any row: -/+ 1, ZL/ZR to the previous/next ten, X max, Y back to 1 */
+    /* from any zone: -/+ 1, X max, Y back to 1 */
     if(pr(B_MINUS)) s_qty--;
     if(pr(B_PLUS))  s_qty++;
-    if(pr(B_ZL)) s_qty=(s_qty-1)/10*10;
-    if(pr(B_ZR)) s_qty=s_qty/10*10+10;
     if(pr(B_X))  s_qty=SH.mx;
     if(pr(B_Y))  s_qty=1;
     it=sheet_pick();
     if(s_qty>SH.mx) s_qty=SH.mx;
     if(s_qty<1) s_qty=1;
-    int q=s_qty;
-    /* the name in messages: a clothing item's name holds its colour, a remake gets its variant */
+    int q=s_qty, nb=vcount(it->body), nf=vcount(it->fab);
+    /* the name in messages: a clothing item's name holds its colour, a remake gets its variants */
     char bn[24], fn[24], what[64]; vname(it->body,s_sh_body+1,bn,sizeof bn); vname(it->fab,s_sh_fab+1,fn,sizeof fn);
-    if(SH.nb && SH.nf) aden_snprintf(what,sizeof what,"%s (%s, %s)",it->name,bn,fn);
-    else if(SH.nb||SH.nf) aden_snprintf(what,sizeof what,"%s (%s)",it->name,SH.nb?bn:fn);
+    if(nb && nf) aden_snprintf(what,sizeof what,"%s (%s, %s)",it->name,bn,fn);
+    else if(nb||nf) aden_snprintf(what,sizeof what,"%s (%s)",it->name,nb?bn:fn);
     else aden_snprintf(what,sizeof what,"%s",it->name);
     if(pr(B_A)) give(it,SH.var,q,what);
-    aden_icons_want(1,&SH.id,&SH.fam,&SH.var);
 
     /* header card: icon, name, family and id */
     char base[64]; int n=base_len(it); if(n>63) n=63; memcpy(base,it->name,n); base[n]=0;
-    if(n<=22) big(150,128,1.6f,C_TEXT,"%s",base); else at(1,15,C_TEXT,"%s",base);
-    at(3,15,C_DIM,"%s - %s",FAMN[SH.fi],it->cat);
-    if(SH.var) at(4,15,C_DIM,"Item %04X   variant %d",it->id,SH.var);
-    else if(it->stack>1) at(4,15,C_DIM,"Item %04X   stacks to %d",it->id,it->stack);
-    else at(4,15,C_DIM,"Item %04X",it->id);
-    /* option rows: name on the left, "< value >" and its position on the right */
-    for(int k=0;k<SH.no;k++){
-        int r=SH_ROW(k); char v[40];
-        switch(SH.opt[k]){
-            case O_COLOR: { const char* c=it->name+base_len(it); int m=(int)strlen(c);
-                if(m>3){ c+=2; m-=3; } else { c=it->name; m=(int)strlen(c); }
-                if(m>32) m=32; memcpy(v,c,m); v[m]=0;
-                at(r,2,C_TEXT,"Color"); at(r,20,C_TEXT,"< %s >",v); at_r(r,62,C_DIM,"%d/%d",s_sh_col+1,L->ncol); break; }
-            case O_BODY: vname(it->body,0,v,sizeof v); at(r,2,C_TEXT,"%s",clip(v,17));
-                at(r,20,C_TEXT,"< %s >",clip(bn,23)); at_r(r,62,C_DIM,"%d/%d",s_sh_body+1,SH.nb); break;
-            case O_FAB:  vname(it->fab,0,v,sizeof v); at(r,2,C_TEXT,"%s",clip(v,17));
-                at(r,20,C_TEXT,"< %s >",clip(fn,23)); at_r(r,62,C_DIM,"%d/%d",s_sh_fab+1,SH.nf); break;
-            case O_QTY:  at(r,2,C_TEXT,"Amount"); at(r,20,C_TEXT,"< %d >",q); at_r(r,62,C_DIM,"max %d",SH.mx); break;
-            case O_DEST: { int f= s_to_storage ? aden_storage_free() : aden_pocket_free();
-                at(r,2,C_TEXT,"Send to"); at(r,20,C_TEXT,"< %s >",s_to_storage?"Home storage":"Pockets");
-                if(f>=0) at_r(r,62,C_DIM,"%d free",f); break; }
+    if(n<=22) big(126,118,1.6f,C_TEXT,"%s",base); else at(0,12,C_TEXT,"%s",base);
+    at(2,12,C_DIM,"%s - %s",FAMN[SH.fi],it->cat);
+    if(nb||nf) at(3,12,C_DIM,"Item %04X   variant %d",it->id,SH.var);
+    else if(it->stack>1) at(3,12,C_DIM,"Item %04X   stacks to %d",it->id,it->stack);
+    else at(3,12,C_DIM,"Item %04X",it->id);
+    /* variant grid: one tile per colour or variant of the set shown, like the item grid */
+    if(SH.nset){
+        int s=SH.set[s_sh_set]; char part[24], v[40];
+        if(s==SET_COLOR){ aden_snprintf(part,sizeof part,"Color"); color_of(it,v,sizeof v); }
+        else if(s==SET_BODY){ vname(it->body,0,part,sizeof part); aden_snprintf(v,sizeof v,"%s",bn); }
+        else { vname(it->fab,0,part,sizeof part); aden_snprintf(v,sizeof v,"%s",fn); }
+        at(SH_SET,1,C_TEXT,"%s: %s",part,v);
+        if(SH.nset>1) aden_snprintf(s_famtxt,sizeof s_famtxt,"< %s >",clip(part,16));   /* ZL/ZR: the other set */
+        else at_r(SH_SET,62,C_DIM,"%d/%d",SH.pick+1,SH.n);
+        char la[GPAGE][GLINE+1], lb[GPAGE][GLINE+1];
+        s_grid_on=1; s_grid_bar=0; s_grid_y0=SH_GY0; s_pill_top=GY(SH_SET)-10; s_grid_cur= z==SZ_GRID;
+        s_grid_n=SH.n; s_grid_sel=SH.pick;
+        for(int k=0;k<SH.n;k++){
+            const Item* t= s==SET_COLOR ? L+k : it; char nm[40];
+            s_grid_id[k]=t->id; s_grid_fc[k]=t->fam; s_grid_fam[k]=SH.fi; s_grid_nv[k]=0;
+            s_grid_var[k]= s==SET_BODY ? (u16)(k+32*s_sh_fab) : s==SET_FAB ? (u16)(s_sh_body+32*k) : 0;
+            if(s==SET_COLOR) color_of(t,nm,sizeof nm); else vname(s==SET_BODY?it->body:it->fab,k+1,nm,sizeof nm);
+            wrap2(nm,la[k],lb[k]);
         }
+        grid_labels(la,lb);
+        aden_icons_want(s_grid_n,s_grid_id,s_grid_fc,s_grid_var);   /* the picked tile is the header icon too */
+    } else {
+        at(11,1,C_DIM,"This item has no colors or variants to choose.");
+        aden_icons_want(1,&SH.id,&SH.fam,&SH.var);
     }
-    /* give button: how many slots the amount takes */
+    /* amount and destination rows, then the give button with the slots the amount takes */
+    at(SH_QTY,2,C_TEXT,"Amount"); at(SH_QTY,20,C_TEXT,"< %d >",q); at_r(SH_QTY,62,C_DIM,"max %d",SH.mx);
+    int f= s_to_storage ? aden_storage_free() : aden_pocket_free();
+    at(SH_DEST,2,C_TEXT,"Send to"); at(SH_DEST,20,C_TEXT,"< %s >",s_to_storage?"Home storage":"Pockets");
+    if(f>=0) at_r(SH_DEST,62,C_DIM,"%d free",f);
     int slots= it->stack>1 ? (q+it->stack-1)/it->stack : q;
     const char* who=aden_player_name(aden_player_active());
     at(SH_GIVE,2,C_WHITE,"A  Give %d to %s",q,s_to_storage?"home storage":who[0]?clip(who,12):"pockets");
     at_r(SH_GIVE,62,C_WHITE,"%d slot%s",slots,slots==1?"":"s");
-    text(26,C_DIM,o==O_QTY?"Left/Right 1  ZL/ZR 10  X max  Y one  A give  B back"
-                          :"Up/Down pick  Left/Right change  A give  B back");
+    z=s_sh_row;
+    text(26,C_DIM, z==SZ_QTY ? "Left/Right 1  ZL/ZR 10  X max  Y one  A give  B back"
+                 : z==SZ_DEST ? "Left/Right pockets or storage  A give  B back"
+                 : SH.nset>1 ? "D-pad choose  ZL/ZR other part  A give  B back"
+                 : "D-pad choose  Down amount  A give  B back");
     s_status_row=SH_GIVE+2;
     s_paint=paint_sheet;
+}
+/* the search bar's text: the query on the left, the count at the bar's right end */
+static void search_line(void){
+    int n=at_n(ROW0,1,C_TEXT,"Search: %s%s",s_query,s_typing?"_":"");
+    if(!s_qlen && !s_typing) at(ROW0,10,C_DIM,"Y to type");
+    char c[16]; int m=aden_snprintf(c,sizeof c,"%d found",s_nmatch);
+    if(1+n+2+m>41) m=aden_snprintf(c,sizeof c,"%d",s_nmatch);
+    at_r(ROW0,41,C_DIM,"%s",c);
 }
 static void tab_items(void){
     if(!s_items_loaded) load_items();
@@ -552,8 +626,8 @@ static void tab_items(void){
     if(!s_nitems){ text(ROW0,C_WARN,"items.txt not found on SD card"); text(ROW0+1,C_DIM,"put it in sdmc/aden/items.txt"); return; }
     int* cur=&s_cur[TAB_ITEMS];
     if(*cur>s_nmatch-1) *cur= s_nmatch>0 ? s_nmatch-1 : 0;
-    put(ROW0,0,C_TEXT,"Search: %s%s   %d found", s_query, s_typing?"_":"", s_nmatch);
     if(s_typing){
+        search_line();
         for(int r=0;r<4;r++){
             char b[72]; int n=0;
             for(int c=0;c<10;c++){ char ch=KEYS[r][c]; if(ch==' ')ch='_';
@@ -572,6 +646,7 @@ static void tab_items(void){
     }
     if(pr(B_A) && s_nmatch){ sheet_open(s_match[*cur]); s_press&=~(u64)B_A; }
     if(s_sheet){ sheet(); return; }
+    search_line();
     /* move in the grid; going past the first or last row turns the page */
     if(left()  && *cur>0) (*cur)--;
     if(right() && *cur<s_nmatch-1) (*cur)++;
@@ -583,10 +658,10 @@ static void tab_items(void){
     if(pr(B_Y)) { s_typing=1; return; }
     /* tiles of the current page */
     int top=(*cur/GPAGE)*GPAGE, pages=(s_nmatch+GPAGE-1)/GPAGE;
-    s_grid_on=1; s_grid_sel=*cur-top; s_grid_n=0;
+    s_grid_on=1; s_grid_bar=1; s_grid_y0=GY0; s_pill_top=GY(ROW0)-10; s_grid_cur=1; s_grid_sel=*cur-top; s_grid_n=0;
     char la[GPAGE][GLINE+1], lb[GPAGE][GLINE+1];
     for(int i=0;i<GPAGE && top+i<s_nmatch;i++){ Item* it=&s_items[s_match[top+i]];
-        s_grid_fam[i]=fam_idx(it->fam); s_grid_id[i]=it->id; s_grid_fc[i]=it->fam; s_grid_n++;
+        s_grid_fam[i]=fam_idx(it->fam); s_grid_id[i]=it->id; s_grid_fc[i]=it->fam; s_grid_var[i]=0; s_grid_n++;
         s_grid_nv[i]= it->ncol>1 ? it->ncol : vcount(it->body)+vcount(it->fab);
         /* a clothing item shows its name without the colour, and how many colours it has */
         if(it->ncol>1){ char b[64]; int n=base_len(it); if(n>63) n=63; memcpy(b,it->name,n); b[n]=0;
@@ -594,11 +669,7 @@ static void tab_items(void){
         else wrap2(it->name,la[i],lb[i]);
     }
     aden_icons_want(s_grid_n,s_grid_id,s_grid_fc,0);   /* only the tiles on this page are loaded */
-    for(int c=0;c<GCOLS;c++){
-        char* o=s_glab[c]; int n=0, cap=(int)sizeof s_glab[c];
-        for(int r=0;r<GROWS;r++){ int i=r*GCOLS+c;
-            n+=aden_snprintf(o+n,cap-n,"%s\n%s\n\n\n\n", i<s_grid_n?la[i]:"", i<s_grid_n?lb[i]:""); }
-    }
+    grid_labels(la,lb);
     aden_snprintf(s_famtxt,sizeof s_famtxt,"< %s >",FAMN[s_fam]);
     if(si){ int n=base_len(si); char b[64]; if(n>63) n=63; memcpy(b,si->name,n); b[n]=0;
         put(ROW0+23,0,C_TEXT,"%s   (%04X, page %d/%d)",b,si->id,top/GPAGE+1,pages);
@@ -1104,28 +1175,23 @@ static void tab_about(void){
     s_paint=paint_about;
 }
 
-/* grid geometry, panel coordinates (x right from PX0, y down from PY0) */
-#define GX0   40.f
-#define GY0   152.f
-#define GTILE 90.f
-#define GPITCH 100.f        /* 5 label lines of 20 px: one print per column lines up with every row */
 #define C_TILE 0xEFE7D2FF
 static void draw_grid(void){
-    gfx_rrect(PX0+20,PY0-110,350,36,18,0xFFFFFFFF);           /* search bar */
-    gfx_rrect(PX0+382,PY0-110,168,36,18,C_HEAD);              /* family filter pill */
+    if(s_grid_bar) gfx_rrect(PX0+20,PY0-s_pill_top,350,36,18,0xFFFFFFFF);   /* search bar */
+    if(s_famtxt[0]) gfx_rrect(PX0+382,PY0-s_pill_top,168,36,18,C_HEAD);     /* family filter / variant set pill */
     for(int i=0;i<s_grid_n;i++){
-        float x=PX0+GX0+(i%GCOLS)*GPITCH, y=PY0-GY0-(i/GCOLS)*GPITCH;
-        if(i==s_grid_sel) gfx_rrect(x-5,y+5,GTILE+10,GTILE+10,22,C_PILL);
+        float x=PX0+GX0+(i%GCOLS)*GPITCH, y=PY0-s_grid_y0-(i/GCOLS)*GPITCH;
+        if(i==s_grid_sel) gfx_rrect(x-5,y+5,GTILE+10,GTILE+10,22,s_grid_cur?C_PILL:C_HEAD);
         gfx_rect(x,y,GTILE,GTILE,C_TILE);
         /* the item's icon once it is loaded, its family colour until then */
-        if(!icon_at(s_grid_id[i],s_grid_fc[i],0,x+22,y-2,46,46,aden_icon_mode())) gfx_disk(x+GTILE*0.5f,y-27,15,FAMCOL[s_grid_fam[i]]);
+        if(!icon_at(s_grid_id[i],s_grid_fc[i],s_grid_var[i],x+22,y-2,46,46,aden_icon_mode())) gfx_disk(x+GTILE*0.5f,y-27,15,FAMCOL[s_grid_fam[i]]);
         /* three dots in the corner: colours or variants to choose from in the give sheet */
         if(s_grid_nv[i]>1) for(int k=0;k<3;k++) gfx_disk(x+GTILE-10-k*7,y-9,2.5f,C_HEAD);
     }
 }
 static void draw_grid_text(void){
-    for(int c=0;c<GCOLS;c++) gfx_text(PX0+GX0+c*GPITCH+1,PY0-GY0-50,1.0f,C_TEXT,s_glab[c]);
-    gfx_text(PX0+466-strlen(s_famtxt)*4.f,PY0-118,1.0f,0xFFFFFFFF,s_famtxt);
+    for(int c=0;c<GCOLS;c++) gfx_text(PX0+GX0+c*GPITCH+1,PY0-s_grid_y0-50,1.0f,C_TEXT,s_glab[c]);
+    if(s_famtxt[0]) gfx_text(PX0+466-strlen(s_famtxt)*4.f,PY0-s_pill_top-10,1.0f,0xFFFFFFFF,s_famtxt);
 }
 static void draw_chrome(void){
     gfx_prim_begin();
@@ -1171,7 +1237,7 @@ void aden_menu_draw(void){
         if(pr(B_L)) s_tab=(s_tab+NTABS-1)%NTABS;
         if(pr(B_R)) s_tab=(s_tab+1)%NTABS;
     }
-    s_hl_row=-1; s_hl_key=-1; s_grid_on=0; s_nicons=0; s_frame++; s_paint=0; s_niq=0; s_status_row=ROW0+LIST+4;
+    s_hl_row=-1; s_hl_key=-1; s_grid_on=0; s_famtxt[0]=0; s_nicons=0; s_frame++; s_paint=0; s_niq=0; s_status_row=ROW0+LIST+4;
     switch(s_tab){
         case TAB_ITEMS:  tab_items(); break;
         case TAB_PLAYER: tab_player(); break;
