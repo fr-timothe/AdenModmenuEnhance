@@ -1,0 +1,970 @@
+<!doctype html>
+<html
+  lang="en"
+  data-resolution="landscape"
+  data-composition-variables='[
+    {"id":"c-panel","type":"color","label":"Panel","default":"#F7F2E2"},
+    {"id":"c-head","type":"color","label":"Header","default":"#5DC2AB"},
+    {"id":"c-headdk","type":"color","label":"Header dark","default":"#3E9C88"},
+    {"id":"c-pill","type":"color","label":"Selection pill","default":"#FBDD75"},
+    {"id":"c-ink","type":"color","label":"Text","default":"#5B4A3A"},
+    {"id":"c-bubble","type":"color","label":"Caption bubble","default":"#FFF8E1"},
+    {"id":"repo","type":"string","label":"Repository","default":"github.com/fr-timothe/AdenModmenuEnhance"}
+  ]'
+>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Aden Modmenu</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      :root {
+        --c-panel: #f7f2e2;
+        --c-head: #5dc2ab;
+        --c-headdk: #3e9c88;
+        --c-pill: #fbdd75;
+        --c-ink: #5b4a3a;
+        --c-bubble: #fff8e1;
+        --font-ui: "Source Code Pro", monospace;
+        --font-cap: "Nunito", sans-serif;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #8ccb67;
+      }
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+
+      /* ---------- the island behind the phone, out of focus ---------- */
+      #bg {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+      }
+      #bg-world {
+        position: absolute;
+        left: -40px;
+        top: -40px;
+        width: 2060px;
+        height: 1160px;
+        background: #8ccb67;
+        filter: blur(10px);
+      }
+      #bg-world > div {
+        position: absolute;
+      }
+      #bg-wash {
+        position: absolute;
+        inset: 0;
+        background: rgba(247, 242, 226, 0.18);
+      }
+
+      /* ---------- game space: 1280x720 drawn x1.5 ---------- */
+      #stage {
+        position: absolute;
+        inset: 0;
+      }
+      #cam {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 1920px;
+        height: 1080px;
+        transform-origin: 0 0;
+      }
+      #game {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 1280px;
+        height: 720px;
+        transform: scale(1.5);
+        transform-origin: 0 0;
+      }
+      #panel {
+        position: absolute;
+        left: 15px;
+        top: 10px;
+        width: 570px;
+        height: 700px;
+        border-radius: 34px;
+        background: var(--c-panel);
+        box-shadow: 0 6px 0 rgba(91, 74, 58, 0.16);
+      }
+      #panel .ly {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 570px;
+        height: 700px;
+      }
+      #panel .st {
+        opacity: 0;
+      }
+      .b {
+        position: absolute;
+      }
+      .t {
+        position: absolute;
+        white-space: pre;
+        font-family: var(--font-ui);
+        font-weight: 600;
+        font-size: 14px;
+        line-height: 16px;
+        height: 16px;
+        letter-spacing: -0.4px;
+      }
+      .reel {
+        position: absolute;
+        overflow: hidden;
+      }
+
+      /* ---------- captions: ACNH dialogue bubbles ---------- */
+      .cap {
+        position: absolute;
+        inset: 0;
+      }
+      .bubble {
+        position: absolute;
+        left: 1150px;
+        top: 404px;
+        width: 578px;
+        padding: 54px 50px 46px 52px;
+        background: var(--c-bubble);
+        border-radius: 72px 60px 68px 58px / 60px 66px 56px 64px;
+        box-shadow: 0 8px 0 rgba(91, 74, 58, 0.18);
+        font-family: var(--font-cap);
+        font-weight: 800;
+        font-size: 46px;
+        line-height: 1.22;
+        color: var(--c-ink);
+        transform-origin: 30px 0;
+      }
+      .tag {
+        position: absolute;
+        left: 1122px;
+        top: 352px;
+        height: 70px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 0 30px;
+        border-radius: 35px;
+        font-family: var(--font-cap);
+        font-weight: 900;
+        font-size: 34px;
+        color: var(--c-ink);
+        box-shadow: 0 5px 0 rgba(91, 74, 58, 0.18);
+        transform-origin: 20% 60%;
+        z-index: 2;
+      }
+      .logo {
+        background: url("assets/A_logo_1024.png") center / contain no-repeat;
+      }
+      .tag .logo {
+        width: 52px;
+        height: 52px;
+        margin-left: -14px;
+      }
+      .ch {
+        opacity: 0;
+      }
+
+      /* ---------- logo sting and end card ---------- */
+      #sting {
+        position: absolute;
+        inset: 0;
+      }
+      #sting-logo {
+        position: absolute;
+        left: 790px;
+        top: 236px;
+        width: 340px;
+        height: 340px;
+      }
+      .word {
+        position: absolute;
+        left: 0;
+        width: 1920px;
+        text-align: center;
+        font-family: var(--font-cap);
+        font-weight: 900;
+        color: var(--c-ink);
+        letter-spacing: -0.01em;
+        paint-order: stroke fill;
+        -webkit-text-stroke: 14px #f7f2e2;
+      }
+      #sting-word {
+        top: 588px;
+        font-size: 128px;
+        line-height: 160px;
+      }
+      .word span {
+        display: inline-block;
+      }
+      #flood {
+        position: absolute;
+        inset: 0;
+      }
+      #flood-fill {
+        position: absolute;
+        inset: 0;
+        background: var(--c-panel);
+      }
+      #end-logo {
+        position: absolute;
+        left: 850px;
+        top: 228px;
+        width: 220px;
+        height: 220px;
+      }
+      #end-word {
+        top: 452px;
+        font-size: 108px;
+        line-height: 136px;
+        -webkit-text-stroke: 0;
+      }
+      #end-line {
+        position: absolute;
+        left: 0;
+        top: 612px;
+        width: 1920px;
+        text-align: center;
+        font-family: var(--font-cap);
+        font-weight: 800;
+        font-size: 44px;
+        color: #7a6853;
+      }
+      #end-repo {
+        position: absolute;
+        left: 0;
+        top: 720px;
+        width: 1920px;
+        display: flex;
+        justify-content: center;
+      }
+      #end-pill {
+        display: flex;
+        align-items: center;
+        height: 84px;
+        border-radius: 42px;
+        background: #ffffff;
+        box-shadow: 0 6px 0 rgba(91, 74, 58, 0.16);
+        overflow: hidden;
+      }
+      #end-pill .gh {
+        height: 84px;
+        display: flex;
+        align-items: center;
+        padding: 0 30px;
+        background: var(--c-headdk);
+        color: #ffffff;
+        font-family: var(--font-cap);
+        font-weight: 900;
+        font-size: 36px;
+      }
+      #end-pill .url {
+        padding: 0 34px 0 28px;
+        font-family: var(--font-ui);
+        font-weight: 600;
+        font-size: 36px;
+        color: var(--c-ink);
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="34.4"
+      data-width="1920"
+      data-height="1080"
+    >
+      <!-- the island behind the phone (drawn by the script below), always on -->
+      <div id="bg" data-layout-ignore>
+        <div id="bg-world"></div>
+        <div id="bg-wash"></div>
+      </div>
+
+      <!-- the Nook Phone panel, rebuilt from src/menu.c (contents built by the script below) -->
+      <div
+        id="stage"
+        class="clip"
+        data-start="2.4"
+        data-duration="29"
+        data-track-index="1"
+        data-track-kind="graphics"
+        data-layout-allow-overflow
+      >
+        <div id="cam">
+          <div id="game">
+            <div id="panel"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- captions -->
+      <div id="cap-intro" class="cap clip" data-start="3.1" data-duration="3.2" data-track-index="2" data-track-kind="graphics">
+        <div class="tag" id="tag-intro" style="background: #fbdd75">
+          <div id="tag-intro-icon" class="logo"></div>Aden Modmenu
+        </div>
+        <div class="bubble" id="bub-intro">In-game mod menu for Animal Crossing: New Horizons</div>
+      </div>
+      <div id="cap-items" class="cap clip" data-start="6.2" data-duration="5.9" data-track-index="3" data-track-kind="graphics">
+        <div class="tag" id="tag-items" style="background: #f2a65a">Items</div>
+        <div class="bubble" id="bub-items">Search 10,000+ items. Spawn them into your pockets.</div>
+      </div>
+      <div id="cap-player" class="cap clip" data-start="12.2" data-duration="5.3" data-track-index="2" data-track-kind="graphics">
+        <div class="tag" id="tag-player" style="background: #e8c547">Player</div>
+        <div class="bubble" id="bub-player">Set Bells, Nook Miles, bank savings and Poki.</div>
+      </div>
+      <div id="cap-island" class="cap clip" data-start="17.6" data-duration="5.3" data-track-index="3" data-track-kind="graphics">
+        <div class="tag" id="tag-island" style="background: #a6d98a">Island</div>
+        <div class="bubble" id="bub-island">Turnip prices and villager friendship.</div>
+      </div>
+      <div id="cap-mods" class="cap clip" data-start="23" data-duration="4.9" data-track-index="2" data-track-kind="graphics">
+        <div class="tag" id="tag-mods" style="background: #a9cdeb">Mods</div>
+        <div class="bubble" id="bub-mods">Stack 99 built in. Turn romfs mods on and off.</div>
+      </div>
+      <div id="cap-about" class="cap clip" data-start="28" data-duration="2.6" data-track-index="3" data-track-kind="graphics">
+        <div class="tag" id="tag-about" style="background: #e9a3c9">About</div>
+        <div class="bubble" id="bub-about">Opens right from the Nook Phone.</div>
+      </div>
+
+      <!-- logo sting -->
+      <div id="sting" class="clip" data-start="0" data-duration="3.2" data-track-index="4" data-track-kind="graphics">
+        <div id="sting-logo" class="logo" role="img" aria-label="Aden Modmenu logo"></div>
+        <div class="word" id="sting-word">Aden Modmenu</div>
+      </div>
+
+      <!-- end card: the panel grows into the whole frame -->
+      <div id="flood" class="clip" data-start="30.6" data-duration="3.8" data-track-index="5" data-track-kind="graphics">
+        <div id="flood-fill"></div>
+        <div id="end-logo" class="logo" role="img" aria-label="Aden Modmenu logo"></div>
+        <div class="word" id="end-word">Aden Modmenu</div>
+        <div id="end-line">For the Eden emulator, ACNH 3.0.2</div>
+        <div id="end-repo">
+          <div id="end-pill"><span class="gh">GitHub</span><span class="url" data-var-text="repo">github.com/fr-timothe/AdenModmenuEnhance</span></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+
+      /* ================================================================
+         Panel builder: the same primitives as src/menu.c, in panel units
+         (x right from the panel's left edge, y down from its top).
+         ================================================================ */
+      const C = {
+        TEXT: "#5B4A3A", DIM: "#A39380", WARN: "#D0503F", PANEL: "#F7F2E2", HEAD: "#5DC2AB",
+        HEADDK: "#3E9C88", PILL: "#FBDD75", TABOFF: "#E6FFF8", LINE: "#E7DEC6", WHITE: "#FFFFFF",
+        WELL: "#EFE7D2", EMPTY: "#F2ECDB", OFF: "#D8CFBD", SLOT: "#D9CDB0", GOLD: "#E8B33A",
+        BUY: "#E3A04A", WARNBG: "#F8E0DA", OK: "#5FB55A", TILE: "#EFE7D2",
+      };
+      const panel = document.getElementById("panel");
+      const GX = (c) => 30 + 8 * c;
+      const GY = (r) => 116 + 20 * r;
+      function mk(parent, cls, css, id) {
+        const e = document.createElement("div");
+        e.className = cls;
+        if (id) e.id = id;
+        Object.assign(e.style, css);
+        parent.appendChild(e);
+        return e;
+      }
+      function layer(id, on) { return mk(panel, on ? "ly" : "ly st", {}, id); }
+      function box(p, x, y, w, h, r, c, id) {
+        return mk(p, "b", { left: x + "px", top: y + "px", width: w + "px", height: h + "px", borderRadius: r + "px", background: c }, id);
+      }
+      function dot(p, x, y, r, c, id) { return box(p, x - r, y - r, 2 * r, 2 * r, r, c, id); }
+      function txt(p, x, y, sc, c, s, id) {
+        const e = mk(p, "t", { left: x + "px", top: y + "px", color: c }, id);
+        if (sc !== 1) Object.assign(e.style, { fontSize: 14 * sc + "px", lineHeight: 16 * sc + "px", height: 16 * sc + "px", letterSpacing: -0.4 * sc + "px" });
+        e.textContent = s;
+        return e;
+      }
+      const at = (p, row, col, c, s, id) => txt(p, GX(col), GY(row), 1, c, s, id);
+      const atr = (p, row, end, c, s, id) => txt(p, GX(end - s.length), GY(row), 1, c, s, id);
+      const big = (p, x, y, sc, c, s, id) => txt(p, x, y, sc, c, s, id);
+      const th = (v) => String(Math.round(v)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+      const hex4 = (v) => v.toString(16).toUpperCase().padStart(4, "0");
+      function meter(p, x, y, w, h, f, c, id) {
+        box(p, x, y, w, h, h / 2, C.LINE);
+        const fill = box(p, x, y, w, h, h / 2, c, id);
+        fill.style.transformOrigin = "0 50%";
+        gsap.set(fill, { scaleX: Math.max(f, h / w) });
+        return fill;
+      }
+      function footer(p, s) { box(p, 20, 610, 530, 2, 0, C.LINE); at(p, 26, 0, C.DIM, s); }
+
+      /* ---------- chrome: header, title, tab row ---------- */
+      box(panel, 0, 0, 570, 100, 0, C.HEAD).style.borderRadius = "34px 34px 0 0";
+      big(panel, 30, 18, 1.6, C.WHITE, "Aden Modmenu");
+      const TABS = ["Items", "Player", "Island", "Mods", "About"];
+      const tabPos = [];
+      { let pos = 0; for (const n of TABS) { tabPos.push(pos); pos += n.length + 5; } }
+      TABS.forEach((n, i) => {
+        const pill = box(panel, 38 + tabPos[i] * 8 - 14, 58, n.length * 8 + 28, 26, 13, C.WHITE, "tabpill-" + i);
+        pill.style.opacity = i === 0 ? 1 : 0;
+      });
+      TABS.forEach((n, i) => txt(panel, 38 + tabPos[i] * 8, 63, 1, i === 0 ? C.HEADDK : C.TABOFF, n, "tabname-" + i));
+      txt(panel, 38 + 59 * 8, 63, 1, C.TABOFF, "L/R");
+
+      /* ---------- Items ---------- */
+      const FAMCOL = { O: "#A39380", F: "#E0A24A", C: "#E07A9B", N: "#7DBF5A", M: "#9C7A55" };
+      const GLINE = 11;
+      function fitc(s, n) { const o = s.slice(0, Math.min(n, GLINE)).split(""); if (n > GLINE) o[GLINE - 1] = "."; return o.join(""); }
+      function wrap2(s) {   /* the label split of menu.c wrap2() */
+        const n = s.length;
+        for (let i = 0; i + 1 < n; i++) if (s[i] === " " && s[i + 1] === "(" && s[n - 1] === ")") return [fitc(s, i), fitc(s.slice(i + 2), n - i - 3)];
+        let cut = n;
+        if (n > GLINE) { cut = GLINE; for (let i = GLINE; i > 0; i--) { if (s[i] === " ") { cut = i; break; } if (s[i - 1] === "-") { cut = i; break; } } }
+        const r = s.slice(cut).replace(/^ +/, "");
+        const b = r.slice(0, GLINE).split(""); if (r.length > GLINE) b[GLINE - 1] = ".";
+        return [s.slice(0, cut), b.join("")];
+      }
+      function grid(p, items, famtxt, sel) {
+        box(p, 20, 110, 350, 36, 18, C.WHITE);
+        box(p, 382, 110, 168, 36, 18, C.HEAD);
+        txt(p, 466 - famtxt.length * 4, 118, 1, C.WHITE, famtxt);
+        let pill = null;
+        if (sel) pill = box(p, 35, 147, 100, 100, 22, C.PILL, sel);
+        items.forEach(([name, fam], i) => {
+          const x = 40 + (i % 5) * 100, y = 152 + Math.floor(i / 5) * 100;
+          box(p, x, y, 90, 90, 0, C.TILE);
+          dot(p, x + 45, y + 27, 15, FAMCOL[fam]);
+          const [a, b] = wrap2(name);
+          txt(p, x + 1, y + 50, 1, C.TEXT, a);
+          txt(p, x + 1, y + 70, 1, C.TEXT, b);
+        });
+        return pill;
+      }
+      const ITEMS_HINT = "A give  Y search  ZL/ZR family  -/+ amount  X send to";
+      /* at rest: every item, page 1 */
+      const ALL = [
+        ["acoustic guitar", "F"], ["aloha shirt", "C"], ["apple", "N"], ["iron nugget", "M"], ["anchor statue", "F"],
+        ["sea bass", "N"], ["frog chair", "F"], ["bamboo piece", "M"], ["kimono", "C"], ["red tulips", "N"],
+        ["cherry", "N"], ["clay", "M"], ["festive tree", "F"], ["royal crown", "C"], ["star fragment", "M"],
+        ["peach", "N"], ["gold nugget", "M"], ["wooden bookshelf", "F"], ["sailor's tee", "C"], ["Bunny Day bag", "O"],
+      ];
+      const lyAll = layer("items-all", true);
+      grid(lyAll, ALL, "< All >", "items-all-pill");
+      at(lyAll, 0, 0, C.TEXT, "Search:    11240 found");
+      at(lyAll, 23, 0, C.TEXT, "acoustic guitar   (0000, page 1/562)");
+      at(lyAll, 24, 0, C.TEXT, "Amount: 1 (max 99)   To: pockets of Mika");
+      at(lyAll, 26, 0, C.DIM, ITEMS_HINT);
+      /* typing on the on-screen keyboard */
+      const KEYS = ["ABCDEFGHIJ", "KLMNOPQRST", "UVWXYZ -'.", "0123456789"];
+      const lyType = layer("items-type", false);
+      box(lyType, 28, GY(2) - 3, 28, 22, 11, C.PILL, "key-pill");
+      at(lyType, 0, 0, C.TEXT, "Search: _   11240 found", "q-type");
+      KEYS.forEach((k, r) => at(lyType, 2 + r, 0, C.TEXT, k.split("").map((ch) => " " + (ch === " " ? "_" : ch) + " ").join("")));
+      at(lyType, 7, 0, C.DIM, "A type   Y delete   X clear   B done");
+      box(lyType, 20, 610, 530, 2, 0, C.LINE);
+      /* results for WOOD */
+      const WOOD = [
+        ["wood", "M"], ["softwood", "M"], ["hardwood", "M"], ["wooden bookshelf", "F"], ["wooden chair", "F"],
+        ["wooden chest", "F"], ["wooden double bed", "F"], ["wooden end table", "F"], ["wooden full-length mirror", "F"], ["wooden mini table", "F"],
+        ["wooden simple bed", "F"], ["wooden table", "F"], ["wooden wardrobe", "F"], ["wooden waste bin", "F"], ["wooden-block toy", "F"],
+        ["wooden-block bed", "F"], ["wooden-block chair", "F"], ["ironwood bed", "F"], ["ironwood chair", "F"], ["ironwood dresser", "F"],
+      ];
+      const lyWood = layer("items-wood", false);
+      grid(lyWood, WOOD, "< All >", "grid-pill");
+      at(lyWood, 0, 0, C.TEXT, "Search: WOOD   86 found");
+      at(lyWood, 22, 0, C.WARN, "Added 40 x hardwood to your pockets", "items-status").style.opacity = 0;
+      at(lyWood, 23, 0, C.TEXT, "wood   (0AA6, page 1/5)", "items-info");
+      at(lyWood, 24, 0, C.TEXT, "Amount: 1 (max 1200)   To: pockets of Mika", "items-amt");
+      at(lyWood, 26, 0, C.DIM, ITEMS_HINT);
+
+      /* ---------- Player ---------- */
+      const CUR = [
+        { s: "Bells", a: "B", col: "#E8B33A", v: 12480 },
+        { s: "Miles", a: "M", col: "#6FA8DC", v: 23540 },
+        { s: "Bank", a: "S", col: "#9C7A55", v: 1204300 },
+        { s: "Poki", a: "P", col: "#E07A9B", v: 3150 },
+      ];
+      const lyPl = layer("player", false);
+      box(lyPl, 20, 108, 530, 90, 24, C.WHITE);
+      dot(lyPl, 64, 154, 30, C.HEAD);
+      for (let i = 0; i < 3; i++) dot(lyPl, 114 + i * 14, 186, 4, i === 0 ? C.HEAD : C.LINE);
+      CUR.forEach((k, i) => {
+        const x = 20 + 136 * i;
+        if (i === 0) box(lyPl, x, 208, 124, 96, 20, C.WHITE);
+        else box(lyPl, x, 208, 124, 80, 20, C.WELL);
+        dot(lyPl, x + 22, 224, 12, k.col);
+      });
+      box(lyPl, 20, 296, 530, 152, 24, C.WHITE);
+      /* digit boxes for 99,999: dig_x(5, i) */
+      const DIGX = [161, 209, 273, 321, 369];
+      DIGX.forEach((x, i) => box(lyPl, x, 340, 40, 52, 12, C.WELL));
+      box(lyPl, DIGX[1], 340, 40, 52, 12, C.PILL, "dig-edit").style.opacity = 0;
+      const START = "12480";
+      DIGX.forEach((x, i) => {
+        const reel = mk(lyPl, "reel", { left: x + "px", top: "340px", width: "40px", height: "52px" });
+        reel.setAttribute("data-layout-allow-occlusion", "");   /* a reel strip: only the digit in the window shows */
+        const strip = mk(reel, "b", { left: "0px", top: "0px", width: "40px", height: 52 * 10 + "px" }, "reel-" + i);
+        for (let d = 0; d < 10; d++) big(strip, 12, 52 * d + 10, 2, C.TEXT, String(d)).setAttribute("data-layout-allow-occlusion", "");
+        gsap.set(strip, { y: -52 * Number(START[i]) });
+      });
+      /* unlock cards */
+      const RING = [];
+      for (let d = 0; d < 16; d++) RING.push([24 * Math.sin((d * Math.PI) / 8), -24 * Math.cos((d * Math.PI) / 8)]);
+      [[418, 923], [64, 88], null].forEach((kt, i) => {
+        const x = 22 + 176 * i, cx = x + 36, cy = 494;
+        box(lyPl, x, 462, 170, 84, 20, C.WHITE);
+        if (kt) {
+          const on = Math.floor((kt[0] * 16 + Math.floor(kt[1] / 2)) / kt[1]);
+          RING.forEach(([dx, dy], d) => dot(lyPl, cx + dx, cy + dy, 3.2, d < on ? C.HEAD : C.LINE));
+        } else { dot(lyPl, cx, cy + 6, 18, C.GOLD); dot(lyPl, cx, cy - 16, 7, C.GOLD); }
+      });
+      big(lyPl, 56, 138, 2, C.WHITE, "M");
+      big(lyPl, 110, 120, 1.6, C.TEXT, "Mika");
+      at(lyPl, 2, 10, C.DIM, "of Seabreeze");
+      atr(lyPl, 1, 62, C.DIM, "< 1 / 3 >");
+      CUR.forEach((k, i) => {
+        at(lyPl, 5, 1 + 17 * i, C.WHITE, k.a);
+        at(lyPl, 5, 4 + 17 * i, C.TEXT, k.s);
+        at(lyPl, 7, 1 + 17 * i, C.TEXT, th(k.v), i === 0 ? "bells-val" : null);
+      });
+      at(lyPl, 10, 1, C.TEXT, "Bells in wallet");
+      atr(lyPl, 10, 62, C.DIM, "max 99,999");
+      const plHelp = mk(lyPl, "ly", {}, "pl-help");
+      at(plHelp, 14, 1, C.DIM, "A edit digits   ZL/ZR +-10,000   X max   Y zero");
+      at(plHelp, 15, 1, C.DIM, "More than 99,999 Bells only fits as Bell bags.");
+      at(lyPl, 18, 8, C.TEXT, "Recipes"); at(lyPl, 19, 8, C.DIM, "418/923");
+      at(lyPl, 18, 30, C.TEXT, "Reactions"); at(lyPl, 19, 30, C.DIM, "64/88");
+      at(lyPl, 18, 52, C.TEXT, "Bell bags"); at(lyPl, 19, 52, C.DIM, "12 free");
+      box(lyPl, 20, 610, 530, 2, 0, C.LINE);
+      at(lyPl, 26, 0, C.DIM, "Up/Down zone  Left/Right pick  A open/use  - search again", "pl-hint");
+      at(lyPl, 26, 0, C.DIM, "Left/Right digit  Up/Down change  X max  Y zero  A done", "pl-hint-edit").style.opacity = 0;
+
+      /* ---------- Island ---------- */
+      const SPECIES = { 4: "Cat", 32: "Squirrel", 14: "Goat", 5: "Cub", 34: "Wolf", 24: "Octopus", 11: "Duck", 10: "Dog" };
+      const VCOL = ["#9DB0CC", "#D9B48A", "#E9A3C9", "#A9CDEB", "#F2A65A", "#E8C547", "#F08A6C", "#C79C6E"];
+      const VIL = [
+        ["Raymond", 4, 120, 0], ["Marshal", 32, 87, 0], ["Sherb", 14, 255, 0], ["Judy", 5, 200, 0], ["Audie", 34, 64, 0],
+        ["Zucker", 24, 31, 0], ["Molly", 11, 150, 0], ["Stitches", 5, 255, 0], ["Ankha", 4, 18, 1], ["Lucky", 10, 99, 0],
+      ];
+      const flevel = (f) => (f < 0 ? 0 : f < 25 ? 1 : f < 70 ? 2 : f < 100 ? 3 : f < 150 ? 4 : f < 200 ? 5 : 6);
+      const lyIs = layer("island", false);
+      /* tickets */
+      const tkSel = box(lyIs, 10, 100, 270, 100, 22, C.PILL, "ticket-pill");
+      box(lyIs, 14, 104, 262, 92, 18, C.WHITE);
+      box(lyIs, 286, 104, 262, 92, 18, C.WHITE);
+      meter(lyIs, 30, 178, 230, 8, 98 / 999, C.HEAD, "sell-meter");
+      meter(lyIs, 302, 178, 230, 8, 94 / 999, C.BUY);
+      at(lyIs, 0, 0, C.DIM, "Sell, all week");
+      at(lyIs, 0, 34, C.DIM, "Buy, Daisy Mae");
+      big(lyIs, 30, 136, 2, C.TEXT, "98", "sell-big");
+      big(lyIs, 302, 136, 2, C.TEXT, "94");
+      at(lyIs, 2, 5, C.DIM, "bells", "sell-bells");
+      at(lyIs, 2, 39, C.DIM, "bells");
+      /* villager list */
+      box(lyIs, 16, 204, 220, 356, 18, C.WELL);
+      const listPill = box(lyIs, 22, GY(6) - 3, 208, 22, 11, C.PILL, "list-pill");
+      listPill.style.opacity = 0;
+      dot(lyIs, 46, 244, 7, C.HEAD);
+      VIL.forEach(([n, s, f, m], i) => {
+        dot(lyIs, 46, 264 + 20 * i, 7, VCOL[s % 8]);
+        if (m) box(lyIs, 152, GY(7 + i) - 1, 40, 18, 9, C.WARNBG);
+      });
+      at(lyIs, 5, 2, C.DIM, "Villagers 10/10");
+      at(lyIs, 6, 4, C.TEXT, "Everyone");
+      VIL.forEach(([n, s, f, m], i) => {
+        at(lyIs, 7 + i, 4, C.TEXT, n.slice(0, 10));
+        if (m) at(lyIs, 7 + i, 16, C.WARN, "out");
+        atr(lyIs, 7 + i, 24, C.TEXT, String(f), i === 1 ? "marshal-f" : null);
+      });
+      box(lyIs, 244, 204, 310, 356, 18, C.WHITE);
+      /* card: sell ticket */
+      const cdSell = mk(lyIs, "ly", {}, "card-sell");
+      for (let i = 0; i < 4; i++) box(cdSell, 258, GY(8 + 2 * i) - 3, 64, 22, 11, C.HEADDK);
+      const WEEK = [98, 92, 87, 81, 136, 158, 412, 98, 74, 70, 66, 61];
+      WEEK.forEach((v, i) => {
+        const h = Math.max(2, Math.min(70, (v * 70) / 999));
+        const bar = box(cdSell, 264 + 23 * i, 460, 17, 70, 4, C.HEAD, "bar-" + i);
+        bar.style.transformOrigin = "50% 100%";
+        gsap.set(bar, { scaleY: h / 70 });
+      });
+      box(cdSell, 262, 530, 276, 2, 0, C.LINE);
+      at(cdSell, 5, 29, C.TEXT, "Sell price");
+      at(cdSell, 6, 29, C.DIM, "Every half-day, Mon to Sat");
+      [["- +", 31], ["ZL ZR", 30], ["X", 32], ["Y", 32]].forEach(([k, c], i) => at(cdSell, 8 + 2 * i, c, C.WHITE, k));
+      at(cdSell, 8, 38, C.TEXT, "10 down / up");
+      at(cdSell, 10, 38, C.TEXT, "100 down / up");
+      at(cdSell, 12, 38, C.TEXT, "Best natural (660)");
+      at(cdSell, 14, 38, C.TEXT, "Zero");
+      at(cdSell, 16, 29, C.DIM, "This week");
+      at(cdSell, 21, 29, C.DIM, "Mon");
+      atr(cdSell, 21, 63, C.DIM, "Sat");
+      /* card: Everyone */
+      const cdAll = mk(lyIs, "ly st", {}, "card-all");
+      dot(cdAll, 294, 244, 28, C.HEAD);
+      box(cdAll, 262, 366, 276, 2, 0, C.LINE);
+      dot(cdAll, 274, GY(13) + 8, 12, C.HEADDK);
+      at(cdAll, 6, 32, C.WHITE, "All");
+      big(cdAll, 334, 222, 1.6, C.TEXT, "Everyone");
+      at(cdAll, 7, 38, C.DIM, "10 villagers");
+      at(cdAll, 9, 29, C.DIM, "Best friends");
+      atr(cdAll, 9, 63, C.TEXT, "2 / 10");
+      at(cdAll, 13, 30, C.WHITE, "A");
+      at(cdAll, 13, 33, C.TEXT, "Best friend for all (255)");
+      /* card: one villager */
+      function vcard(id, i) {
+        const [n, s, f, m] = VIL[i];
+        const L = flevel(f);
+        const cd = mk(lyIs, "ly st", {}, id);
+        dot(cd, 294, 244, 28, VCOL[s % 8]);
+        meter(cd, 262, 318, 276, 10, f / 255, C.HEAD, id + "-meter");
+        for (let d = 0; d < 6; d++) {
+          dot(cd, 271 + 22 * d, GY(11) + 8, 7, C.LINE);
+          const lit = dot(cd, 271 + 22 * d, GY(11) + 8, 7, C.PILL, id + "-lv" + d);
+          if (d >= L) lit.style.opacity = 0;
+        }
+        box(cd, 262, 366, 276, 2, 0, C.LINE);
+        for (let k = 0; k < 3; k++) dot(cd, 274, GY(13 + 2 * k) + 8, 12, C.HEADDK);
+        at(cd, 6, 32, C.TEXT, n.slice(0, 2));
+        big(cd, 334, 222, 1.6, C.TEXT, n);
+        at(cd, 7, 38, C.DIM, SPECIES[s]);
+        at(cd, 9, 29, C.DIM, "Friendship");
+        atr(cd, 9, 63, C.TEXT, f + " / 255", id + "-f");
+        atr(cd, 11, 63, C.DIM, "Level " + L + " of 6", id + "-lvl");
+        at(cd, 13, 30, C.WHITE, "A"); at(cd, 13, 33, C.TEXT, "Best friend (255)");
+        at(cd, 15, 30, C.WHITE, "Y"); at(cd, 15, 33, C.TEXT, "Reset friendship (25)");
+        at(cd, 17, 30, C.WHITE, "X"); at(cd, 17, 33, C.TEXT, "Moving out: " + (m ? "yes" : "no"));
+        return cd;
+      }
+      vcard("card-ray", 0);
+      vcard("card-mar", 1);
+      at(lyIs, 23, 0, C.WARN, "Marshal is now your best friend", "island-status").style.opacity = 0;
+      box(lyIs, 20, 610, 530, 2, 0, C.LINE);
+      at(lyIs, 26, 0, C.DIM, "Left/Right sell or buy   Down villagers   B close", "is-hint");
+      at(lyIs, 26, 0, C.DIM, "Up/Down pick   Up from the top: prices   B close", "is-hint2").style.opacity = 0;
+
+      /* ---------- Mods ---------- */
+      const BADGE = ["#E0A24A", "#E07A9B", "#7DBF5A", "#6B9BD1", "#9C7A55", "#C08A55", "#D46A5A", "#8FB3C9"];
+      const MODS = [
+        { n: "BrighterWater", romfs: 1, exefs: 0, on: 1 },
+        { n: "PastelPaths", romfs: 1, exefs: 0, on: 0 },
+        { n: "CozyLighting", romfs: 1, exefs: 0, on: 1 },
+        { n: "60fps", romfs: 0, exefs: 1, on: 0 },
+        { n: "SnowyIsland", romfs: 1, exefs: 0, on: 0 },
+        { n: "BetterSigns", romfs: 1, exefs: 1, on: 1 },
+      ];
+      const initials = (s) => { const u = s.replace(/[^A-Z]/g, "").slice(0, 2); return u || s[0].toUpperCase(); };
+      const lyMods = layer("mods", false);
+      box(lyMods, 20, 108, 530, 76, 22, C.WELL);
+      box(lyMods, 20, 108, 530, 76, 22, C.PILL, "banner-sel");
+      box(lyMods, 38, 128, 64, 36, 18, C.OFF);
+      box(lyMods, 38, 128, 64, 36, 18, C.HEAD, "s99-on").style.opacity = 0;
+      dot(lyMods, 56, 146, 14, C.WHITE, "s99-knob");
+      box(lyMods, 482, 131, 56, 26, 13, C.WHITE);
+      const modPill = box(lyMods, 13, 215, 180, 94, 22, C.PILL, "mod-pill");
+      modPill.style.opacity = 0;
+      MODS.forEach((m, i) => {
+        const x = 18 + 176 * (i % 3), y = 220 + 100 * Math.floor(i / 3);
+        box(lyMods, x, y, 170, 84, 18, m.romfs ? C.WELL : C.EMPTY);
+        dot(lyMods, x + 28, y + 25, 13, m.romfs ? BADGE[i % 8] : C.OFF);
+        if (m.romfs) {
+          box(lyMods, x + 118, y + 14, 38, 22, 11, m.on ? C.HEAD : C.OFF, i === 1 ? "pp-track" : null);
+          if (i === 1) box(lyMods, x + 118, y + 14, 38, 22, 11, C.HEAD, "pp-on").style.opacity = 0;
+          dot(lyMods, m.on ? x + 145 : x + 129, y + 25, 9, C.WHITE, i === 1 ? "pp-knob" : null);
+        }
+      });
+      const pend = box(lyMods, 20, 512, 530, 32, 16, C.PILL, "mods-pend");
+      pend.style.opacity = 0;
+      at(lyMods, 1, 11, C.TEXT, "Stack 99 (built-in)");
+      at(lyMods, 2, 11, C.DIM, "Fruit, materials, shells stack to 99");
+      atr(lyMods, 1, 62, C.HEADDK, "live");
+      at(lyMods, 4, 1, C.TEXT, "Folder mods  6");
+      MODS.forEach((m, i) => {
+        const c = 1 + 22 * (i % 3), r = 6 + 5 * Math.floor(i / 3);
+        at(lyMods, r, c, C.WHITE, initials(m.n));
+        at(lyMods, r + 1, c, m.romfs ? C.TEXT : C.DIM, m.n.length > 16 ? m.n.slice(0, 15) + "." : m.n);
+        if (!m.romfs) at(lyMods, r + 2, c, C.DIM, "code mod: use Eden");
+        else if (m.exefs) at(lyMods, r + 2, c, C.DIM, "romfs only");
+      });
+      at(lyMods, 8, 23, C.WARN, "restart needed", "pp-restart").style.opacity = 0;
+      const pendTxt = mk(lyMods, "ly st", {}, "mods-pend-txt");
+      at(pendTxt, 20, 2, C.TEXT, "1 change waits for a restart");
+      atr(pendTxt, 20, 61, C.TEXT, "- undo");
+      at(lyMods, 22, 0, C.DIM, "", "mods-msg");
+      box(lyMods, 20, 610, 530, 2, 0, C.LINE);
+      at(lyMods, 26, 0, C.DIM, "D-pad move  ZL/ZR page  A on/off  - undo  Y rescan");
+
+      /* ---------- About ---------- */
+      const lyAb = layer("about", false);
+      box(lyAb, 16, 108, 150, 440, 18, C.WELL);
+      box(lyAb, 24, GY(1) - 5, 134, 30, 15, C.WHITE, "about-pill");
+      at(lyAb, 1, 2, C.HEADDK, "Info", "ab-info");
+      at(lyAb, 3, 2, C.TEXT, "Credits", "ab-cred");
+      const abInfo = mk(lyAb, "ly", {}, "about-info");
+      box(abInfo, 184, 180, 366, 92, 18, C.WHITE);
+      [4, 5, 6].forEach((r) => dot(abInfo, 210, GY(r) + 8, 6, C.OK));
+      big(abInfo, 198, 120, 1.6, C.TEXT, "v0.6.0-beta.14");
+      at(abInfo, 2, 21, C.DIM, "for ACNH 3.0.2 / 3.0.3");
+      at(abInfo, 4, 24, C.TEXT, "Player data"); at(abInfo, 4, 39, C.DIM, "found, 3 players");
+      at(abInfo, 5, 24, C.TEXT, "Island"); at(abInfo, 5, 39, C.DIM, "found");
+      at(abInfo, 6, 24, C.TEXT, "Item icons"); at(abInfo, 6, 39, C.DIM, "ON");
+      at(abInfo, 9, 21, C.HEADDK, "How to use");
+      at(abInfo, 10, 21, C.DIM, "Open it from the Nook Phone.");
+      at(abInfo, 11, 21, C.DIM, "Your character is paused while it is open.");
+      at(abInfo, 13, 21, C.HEADDK, "Item icons");
+      at(abInfo, 14, 21, C.DIM, "The Items grid shows the game's icons.");
+      at(abInfo, 15, 21, C.DIM, "If they crash the game, they turn off");
+      at(abInfo, 16, 21, C.DIM, "by themselves at the next start.");
+      at(abInfo, 26, 0, C.DIM, "A icons off   ZL/ZR page   L/R tabs   B close");
+      const abCred = mk(lyAb, "ly st", {}, "about-cred");
+      at(abCred, 1, 21, C.DIM, "Made by"); at(abCred, 2, 21, C.TEXT, "AdenDev"); at(abCred, 3, 21, C.TEXT, "Timothe Montfrond (fr-timothe)");
+      at(abCred, 5, 21, C.DIM, "Item names and data"); at(abCred, 6, 21, C.TEXT, "NHSE by kwsch");
+      at(abCred, 8, 21, C.DIM, "License"); at(abCred, 9, 21, C.TEXT, "GPL-3.0");
+      at(abCred, 11, 21, C.DIM, "Found a bug? Send this file:"); at(abCred, 12, 21, C.TEXT, "sdmc/aden/log.txt");
+      at(abCred, 26, 0, C.DIM, "ZL/ZR page   L/R tabs   B close");
+      box(lyAb, 20, 610, 530, 2, 0, C.LINE);
+
+      /* ================================================================
+         The island behind the phone: flat shapes, blurred as one layer.
+         ================================================================ */
+      const world = document.getElementById("bg-world");
+      function shape(css) { return mk(world, "", css); }
+      shape({ left: "0px", top: "0px", width: "2060px", height: "1160px", background: "radial-gradient(ellipse 900px 520px at 1500px 300px, #9bd476 0%, #8ccb67 70%)" });
+      /* river */
+      shape({ left: "1080px", top: "-120px", width: "190px", height: "760px", background: "#6fcfd6", borderRadius: "95px", transform: "rotate(-18deg)" });
+      shape({ left: "1260px", top: "520px", width: "520px", height: "180px", background: "#6fcfd6", borderRadius: "90px", transform: "rotate(-8deg)" });
+      /* beach and sea, lower right */
+      shape({ left: "1240px", top: "780px", width: "1100px", height: "600px", background: "#f1e0ae", borderRadius: "300px 0 0 0" });
+      shape({ left: "1560px", top: "900px", width: "900px", height: "500px", background: "#e8faf8", borderRadius: "260px 0 0 0" });
+      shape({ left: "1590px", top: "930px", width: "900px", height: "500px", background: "#58c3cc", borderRadius: "240px 0 0 0" });
+      /* trees, flowers */
+      const TREES = [[980, 120, 70], [1180, 860, 64], [1700, 160, 78], [1870, 420, 70], [1500, 660, 60], [260, 180, 70], [520, 760, 66], [140, 900, 72], [1960, 120, 64], [880, 520, 58]];
+      TREES.forEach(([x, y, r]) => {
+        shape({ left: x - r * 0.9 + "px", top: y + r * 0.55 + "px", width: r * 1.9 + "px", height: r * 0.8 + "px", borderRadius: "50%", background: "rgba(48,100,52,0.32)" });
+        shape({ left: x - r + "px", top: y - r + "px", width: 2 * r + "px", height: 2 * r + "px", borderRadius: "50%", background: "#4e9b57" });
+        shape({ left: x - r * 0.55 + "px", top: y - r * 0.75 + "px", width: r * 0.9 + "px", height: r * 0.8 + "px", borderRadius: "50%", background: "#62b068" });
+      });
+      const FLOWERS = [[1340, 360, "#e8574f"], [1372, 380, "#e8574f"], [1356, 404, "#ffffff"], [1640, 480, "#f6d24b"], [1668, 500, "#f6d24b"], [1650, 524, "#e8574f"], [1120, 680, "#ffffff"], [1146, 700, "#f6d24b"], [1830, 640, "#e8574f"], [1450, 140, "#ffffff"], [1478, 160, "#e8574f"]];
+      FLOWERS.forEach(([x, y, c]) => shape({ left: x + "px", top: y + "px", width: "26px", height: "26px", borderRadius: "50%", background: c }));
+
+      /* ================================================================
+         Captions: one span per character, typed in like ACNH dialogue.
+         ================================================================ */
+      function splitChars(id) {
+        const e = document.getElementById(id);
+        const words = e.textContent.split(" ");
+        e.textContent = "";
+        const spans = [];
+        words.forEach((w, wi) => {
+          const ws = document.createElement("span");
+          ws.style.whiteSpace = "nowrap";
+          for (const ch of w) { const s = document.createElement("span"); s.className = "ch"; s.textContent = ch; ws.appendChild(s); spans.push(s); }
+          e.appendChild(ws);
+          if (wi < words.length - 1) { const sp = document.createElement("span"); sp.className = "ch"; sp.textContent = " "; e.appendChild(sp); spans.push(sp); }
+        });
+        return spans;
+      }
+      function splitWord(id) {
+        const e = document.getElementById(id);
+        const t = e.textContent; e.textContent = "";
+        return [...t].map((ch) => { const s = document.createElement("span"); s.textContent = ch === " " ? " " : ch; e.appendChild(s); return s; });
+      }
+
+      /* ================================================================
+         Timeline
+         ================================================================ */
+      const S = { intro: 3.2, items: 6.2, player: 12.2, island: 17.6, mods: 23.0, about: 28.0, outro: 30.6, end: 34.4 };
+      const tl = gsap.timeline({ paused: true });
+      const show = (sel, t) => tl.set(sel, { opacity: 1 }, t);
+      const hide = (sel, t) => tl.set(sel, { opacity: 0 }, t);
+      const glide = (sel, t, from, to, d = 0.12) =>
+        tl.fromTo(sel, from, { ...to, duration: d, ease: "power2.out", immediateRender: false }, t);
+
+      /* text that changes with time: rebuilt from t on every frame */
+      const dyn = [];
+      const steps = (id, list) => { const e = document.getElementById(id); dyn.push((t) => { let s = list[0][1]; for (const [tt, v] of list) if (t >= tt) s = v; if (e.textContent !== s) e.textContent = s; }); };
+      const typed = [];
+      function render(t) {
+        for (const f of dyn) f(t);
+        for (const c of typed) { const n = Math.floor((t - c.t0) / c.rate); c.spans.forEach((s, i) => (s.style.opacity = i <= n ? 1 : 0)); }
+      }
+
+      /* the island drifts slowly behind everything */
+      tl.fromTo("#bg-world", { x: 0 }, { x: -40, duration: S.end, ease: "none" }, 0);
+
+      /* ---- 0.0 logo sting ---- */
+      const stingLetters = splitWord("sting-word");
+      tl.fromTo("#sting-logo", { scale: 0.82, y: 24 }, { scale: 1, y: 0, duration: 0.7, ease: "back.out(1.8)" }, 0);
+      tl.fromTo(stingLetters, { opacity: 0.0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.16, stagger: 0.045, ease: "power2.out" }, 0.45);
+      /* the A carries into the first bubble's name tag while the phone slides in */
+      gsap.set("#cam", { x: -960, y: 0, scale: 1 });
+      tl.fromTo("#cam", { x: -960 }, { x: 0, duration: 0.75, ease: "expo.out", immediateRender: false }, 2.5);
+      tl.fromTo(stingLetters, { opacity: 1, filter: "blur(0px)" }, { opacity: 0, filter: "blur(8px)", duration: 0.2, stagger: 0.012, ease: "power2.in", immediateRender: false }, 2.45);
+      /* sting logo centre (960, 406), 340 px -> name-tag icon centre (1164, 387), 52 px */
+      tl.fromTo("#sting-logo", { x: 0, y: 0, scale: 1 }, { x: 1164 - 960, y: 387 - 406, scale: 52 / 340, duration: 0.7, ease: "power3.inOut", immediateRender: false }, 2.5);
+
+      /* ---- captions ---- */
+      function caption(name, t0, t1, first) {
+        const spans = splitChars("bub-" + name);
+        if (!first) tl.fromTo("#tag-" + name, { scale: 0.5, rotation: -10, opacity: 0 }, { scale: 1, rotation: -4, opacity: 1, duration: 0.35, ease: "back.out(1.6)" }, t0);
+        else tl.fromTo("#tag-" + name, { scale: 0.8, rotation: -4, opacity: 0 }, { scale: 1, rotation: -4, opacity: 1, duration: 0.25, ease: "power2.out" }, t0);
+        tl.fromTo("#bub-" + name, { scale: 0.3, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.4, ease: "back.out(1.3)" }, t0 + 0.12);
+        typed.push({ spans, t0: t0 + 0.3, rate: 0.022 });
+        tl.fromTo(["#tag-" + name, "#bub-" + name], { opacity: 1, filter: "blur(0px)" }, { opacity: 0, filter: "blur(6px)", duration: 0.2, ease: "power2.in", immediateRender: false }, t1 - 0.22);
+      }
+      caption("intro", 3.1, S.items + 0.1, true);
+      tl.fromTo("#tag-intro-icon", { opacity: 0 }, { opacity: 1, duration: 0.05, immediateRender: false }, 3.12);
+      caption("items", S.items + 0.05, S.player - 0.1);
+      caption("player", S.player + 0.1, S.island - 0.1);
+      caption("island", S.island + 0.1, S.mods - 0.1);
+      caption("mods", S.mods + 0.1, S.about - 0.1);
+      caption("about", S.about + 0.1, S.outro);
+
+      /* camera: push in on the widget being used, pull back before the next tab */
+      function push(t, s, pc) {
+        const to = { x: 12 - 22.5 * s, y: 540 - s * (15 + 1.5 * pc), scale: s };
+        tl.fromTo("#cam", { x: 0, y: 0, scale: 1 }, { ...to, duration: 0.5, ease: "power2.inOut", immediateRender: false }, t);
+        return to;
+      }
+      function pull(t, from) { tl.fromTo("#cam", from, { x: 0, y: 0, scale: 1, duration: 0.45, ease: "power2.inOut", immediateRender: false }, t); }
+      function tab(i, t) {
+        TABS.forEach((n, k) => { tl.set("#tabpill-" + k, { opacity: k === i ? 1 : 0 }, t); tl.set("#tabname-" + k, { color: k === i ? C.HEADDK : C.TABOFF }, t); });
+      }
+
+      /* ---- Items ---- */
+      {
+        const s = S.items;
+        hide("#items-all", s + 0.3); show("#items-type", s + 0.3);
+        const kp = (kx, ky) => ({ x: 24 * kx, y: 20 * ky });
+        gsap.set("#key-pill", { x: 0, y: 0 });
+        glide("#key-pill", s + 0.6, kp(0, 0), kp(2, 2), 0.16);
+        glide("#key-pill", s + 1.0, kp(2, 2), kp(4, 1), 0.16);
+        glide("#key-pill", s + 1.55, kp(4, 1), kp(3, 0), 0.14);
+        steps("q-type", [[0, "Search: _   11240 found"], [s + 0.8, "Search: W_   2481 found"], [s + 1.2, "Search: WO_   512 found"], [s + 1.4, "Search: WOO_   97 found"], [s + 1.75, "Search: WOOD_   86 found"]]);
+        hide("#items-type", s + 2.1); show("#items-wood", s + 2.1);
+        const cam = push(s + 2.15, 1.3, 360);
+        gsap.set("#grid-pill", { x: 0, y: 0 });
+        glide("#grid-pill", s + 2.6, { x: 0 }, { x: 100 });
+        glide("#grid-pill", s + 2.85, { x: 100 }, { x: 200 });
+        steps("items-info", [[0, "wood   (0AA6, page 1/5)"], [s + 2.6, "softwood   (0AA7, page 1/5)"], [s + 2.85, "hardwood   (0AA8, page 1/5)"]]);
+        const QTY = [2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40];
+        steps("items-amt", [[0, "Amount: 1 (max 1200)   To: pockets of Mika"], ...QTY.map((q, i) => [s + 3.1 + i * 0.065, "Amount: " + q + " (max 1200)   To: pockets of Mika"])]);
+        show("#items-status", s + 4.1);
+        pull(s + 5.5, cam);
+      }
+
+      /* ---- Player ---- */
+      {
+        const s = S.player;
+        tab(1, s); hide("#items-wood", s); show("#player", s);
+        const cam = push(s + 1.3, 1.32, 420);
+        show("#dig-edit", s + 1.9); hide("#pl-help", s + 1.9); hide("#pl-hint", s + 1.9); show("#pl-hint-edit", s + 1.9);
+        [...START].forEach((d, i) =>
+          tl.fromTo("#reel-" + i, { y: -52 * Number(d) }, { y: -52 * 9, duration: 0.55, ease: "power3.inOut", immediateRender: false }, s + 2.4 + i * 0.06),
+        );
+        const e = document.getElementById("bells-val");
+        dyn.push((t) => { const k = Math.min(1, Math.max(0, (t - (s + 2.4)) / 0.79)); const v = th(12480 + (99999 - 12480) * (k * k * (3 - 2 * k))); if (e.textContent !== v) e.textContent = v; });
+        hide("#dig-edit", s + 3.5); show("#pl-help", s + 3.5); show("#pl-hint", s + 3.5); hide("#pl-hint-edit", s + 3.5);
+        pull(s + 4.8, cam);
+      }
+
+      /* ---- Island ---- */
+      {
+        const s = S.island;
+        tab(2, s); hide("#player", s); show("#island", s);
+        const cam = push(s + 0.9, 1.3, 330);
+        const sellBig = document.getElementById("sell-big"), lab = document.getElementById("sell-bells");
+        dyn.push((t) => {
+          const k = Math.min(1, Math.max(0, (t - (s + 1.5)) / 0.35));
+          const v = String(Math.round(98 + (660 - 98) * k));
+          if (sellBig.textContent !== v) sellBig.textContent = v;
+          lab.style.left = GX(2 * v.length + 1) + "px";
+        });
+        tl.fromTo("#sell-meter", { scaleX: 98 / 999 }, { scaleX: 660 / 999, duration: 0.35, ease: "power2.out", immediateRender: false }, s + 1.5);
+        WEEK.forEach((v, i) => {
+          const h0 = Math.max(2, (v * 70) / 999) / 70, h1 = (660 * 70) / 999 / 70;
+          tl.fromTo("#bar-" + i, { scaleY: h0 }, { scaleY: h1, duration: 0.4, ease: "back.out(1.4)", immediateRender: false }, s + 1.55 + i * 0.03);
+        });
+        hide("#ticket-pill", s + 2.5); show("#list-pill", s + 2.5);
+        hide("#card-sell", s + 2.5); show("#card-all", s + 2.5);
+        hide("#is-hint", s + 2.5); show("#is-hint2", s + 2.5);
+        gsap.set("#list-pill", { y: 0 });
+        glide("#list-pill", s + 2.8, { y: 0 }, { y: 20 });
+        hide("#card-all", s + 2.8); show("#card-ray", s + 2.8);
+        glide("#list-pill", s + 3.05, { y: 20 }, { y: 40 });
+        hide("#card-ray", s + 3.05); show("#card-mar", s + 3.05);
+        /* A: best friend */
+        const a = s + 3.6;
+        steps("marshal-f", [[0, "87"], [a, "255"]]);
+        steps("card-mar-f", [[0, "87 / 255"], [a, "255 / 255"]]);
+        steps("card-mar-lvl", [[0, "Level 3 of 6"], [a, "Level 6 of 6"]]);
+        const lf = document.getElementById("marshal-f"); dyn.push((t) => (lf.style.left = GX(24 - lf.textContent.length) + "px"));
+        const fm = document.getElementById("card-mar-f"); dyn.push((t) => (fm.style.left = GX(63 - fm.textContent.length) + "px"));
+        const fl = document.getElementById("card-mar-lvl"); dyn.push((t) => (fl.style.left = GX(63 - fl.textContent.length) + "px"));
+        tl.fromTo("#card-mar-meter", { scaleX: 87 / 255 }, { scaleX: 1, duration: 0.3, ease: "power2.out", immediateRender: false }, a);
+        [3, 4, 5].forEach((d, i) => tl.fromTo("#card-mar-lv" + d, { opacity: 0, scale: 0.4 }, { opacity: 1, scale: 1, duration: 0.25, ease: "back.out(2)", immediateRender: false }, a + 0.08 + i * 0.07));
+        show("#island-status", a);
+        pull(s + 4.8, cam);
+      }
+
+      /* ---- Mods ---- */
+      {
+        const s = S.mods;
+        tab(3, s); hide("#island", s); show("#mods", s);
+        const cam = push(s + 0.8, 1.3, 340);
+        const a = s + 1.3;
+        tl.fromTo("#s99-knob", { x: 0 }, { x: 28, duration: 0.15, ease: "power2.out", immediateRender: false }, a);
+        show("#s99-on", a);
+        steps("mods-msg", [[0, ""], [a, "Stack 99 is now ON (186 item kinds changed)"], [s + 2.8, "PastelPaths is now ON - restart the game to apply"]]);
+        hide("#banner-sel", s + 2.2); show("#mod-pill", s + 2.2);
+        gsap.set("#mod-pill", { x: 0 });
+        glide("#mod-pill", s + 2.45, { x: 0 }, { x: 176 });
+        const b = s + 2.8;
+        tl.fromTo("#pp-knob", { x: 0 }, { x: 16, duration: 0.12, ease: "power2.out", immediateRender: false }, b);
+        show("#pp-on", b); show("#pp-restart", b); show("#mods-pend", b); show("#mods-pend-txt", b);
+        pull(s + 4.4, cam);
+      }
+
+      /* ---- About ---- */
+      {
+        const s = S.about;
+        tab(4, s); hide("#mods", s); show("#about", s);
+        const z = s + 1.3;
+        gsap.set("#about-pill", { y: 0 });
+        glide("#about-pill", z, { y: 0 }, { y: 40 });
+        hide("#about-info", z); show("#about-cred", z);
+        tl.set("#ab-info", { color: C.TEXT }, z); tl.set("#ab-cred", { color: C.HEADDK }, z);
+      }
+
+      /* ---- Outro: the panel grows into the frame ---- */
+      {
+        const s = S.outro;
+        tl.fromTo("#flood-fill", { clipPath: "inset(15px 1042.5px 15px 22.5px round 51px)" }, { clipPath: "inset(0px 0px 0px 0px round 0px)", duration: 0.65, ease: "power2.inOut" }, s);
+        const endLetters = splitWord("end-word");
+        tl.fromTo("#end-logo", { scale: 0.4, opacity: 0, y: 40 }, { scale: 1, opacity: 1, y: 0, duration: 0.6, ease: "back.out(1.6)" }, s + 0.45);
+        tl.fromTo(endLetters, { opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.16, stagger: 0.04, ease: "power2.out" }, s + 0.75);
+        tl.fromTo("#end-line", { opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.2, ease: "power2.out" }, s + 1.35);
+        tl.fromTo("#end-pill", { opacity: 0, scale: 0.85 }, { opacity: 1, scale: 1, duration: 0.4, ease: "back.out(1.5)" }, s + 1.6);
+      }
+
+      /* drive the time-based text from the timeline itself */
+      const clock = { t: 0 };
+      tl.fromTo(clock, { t: 0 }, { t: S.end, duration: S.end, ease: "none", onUpdate: () => render(clock.t) }, 0);
+      render(0);
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>
