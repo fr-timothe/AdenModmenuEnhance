@@ -15,8 +15,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=1920, height=1080" />
-    <title>Aden Modmenu</title>
+    <title>Aden Modmenu Enhance</title>
     <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script src="assets/icons/icons.js"></script>
     <style>
       :root {
         --c-panel: #f7f2e2;
@@ -208,7 +209,7 @@
       }
       #sting-word {
         top: 588px;
-        font-size: 128px;
+        font-size: 100px;
         line-height: 160px;
       }
       .word span {
@@ -232,7 +233,7 @@
       }
       #end-word {
         top: 452px;
-        font-size: 108px;
+        font-size: 86px;
         line-height: 136px;
         -webkit-text-stroke: 0;
       }
@@ -319,13 +320,13 @@
       <!-- captions -->
       <div id="cap-intro" class="cap clip" data-start="3.1" data-duration="3.2" data-track-index="2" data-track-kind="graphics">
         <div class="tag" id="tag-intro" style="background: #fbdd75">
-          <div id="tag-intro-icon" class="logo"></div>Aden Modmenu
+          <div id="tag-intro-icon" class="logo"></div>Aden Modmenu Enhance
         </div>
         <div class="bubble" id="bub-intro">In-game mod menu for Animal Crossing: New Horizons</div>
       </div>
       <div id="cap-items" class="cap clip" data-start="6.2" data-duration="5.9" data-track-index="3" data-track-kind="graphics">
         <div class="tag" id="tag-items" style="background: #f2a65a">Items</div>
-        <div class="bubble" id="bub-items">Search 10,000+ items. Spawn them into your pockets.</div>
+        <div class="bubble" id="bub-items">Search 10,000+ items, shown with the game's own icons.</div>
       </div>
       <div id="cap-player" class="cap clip" data-start="12.2" data-duration="5.3" data-track-index="2" data-track-kind="graphics">
         <div class="tag" id="tag-player" style="background: #e8c547">Player</div>
@@ -346,15 +347,15 @@
 
       <!-- logo sting -->
       <div id="sting" class="clip" data-start="0" data-duration="3.2" data-track-index="4" data-track-kind="graphics">
-        <div id="sting-logo" class="logo" role="img" aria-label="Aden Modmenu logo"></div>
-        <div class="word" id="sting-word">Aden Modmenu</div>
+        <div id="sting-logo" class="logo" role="img" aria-label="Aden Modmenu Enhance logo"></div>
+        <div class="word" id="sting-word">Aden Modmenu Enhance</div>
       </div>
 
       <!-- end card: the panel grows into the whole frame -->
       <div id="flood" class="clip" data-start="30.6" data-duration="3.8" data-track-index="5" data-track-kind="graphics">
         <div id="flood-fill"></div>
-        <div id="end-logo" class="logo" role="img" aria-label="Aden Modmenu logo"></div>
-        <div class="word" id="end-word">Aden Modmenu</div>
+        <div id="end-logo" class="logo" role="img" aria-label="Aden Modmenu Enhance logo"></div>
+        <div class="word" id="end-word">Aden Modmenu Enhance</div>
         <div id="end-line">For the Eden emulator, ACNH 3.0.2</div>
         <div id="end-repo">
           <div id="end-pill"><span class="gh">GitHub</span><span class="url" data-var-text="repo">github.com/fr-timothe/AdenModmenuEnhance</span></div>
@@ -413,7 +414,7 @@
 
       /* ---------- chrome: header, title, tab row ---------- */
       box(panel, 0, 0, 570, 100, 0, C.HEAD).style.borderRadius = "34px 34px 0 0";
-      big(panel, 30, 18, 1.6, C.WHITE, "Aden Modmenu");
+      big(panel, 30, 18, 1.6, C.WHITE, "Aden Modmenu Enhance");
       const TABS = ["Items", "Player", "Island", "Mods", "About"];
       const tabPos = [];
       { let pos = 0; for (const n of TABS) { tabPos.push(pos); pos += n.length + 5; } }
@@ -437,7 +438,7 @@
         const b = r.slice(0, GLINE).split(""); if (r.length > GLINE) b[GLINE - 1] = ".";
         return [s.slice(0, cut), b.join("")];
       }
-      function grid(p, items, famtxt, sel) {
+      function grid(p, items, famtxt, sel, idp) {
         box(p, 20, 110, 350, 36, 18, C.WHITE);
         box(p, 382, 110, 168, 36, 18, C.HEAD);
         txt(p, 466 - famtxt.length * 4, 118, 1, C.WHITE, famtxt);
@@ -446,7 +447,13 @@
         items.forEach(([name, fam], i) => {
           const x = 40 + (i % 5) * 100, y = 152 + Math.floor(i / 5) * 100;
           box(p, x, y, 90, 90, 0, C.TILE);
-          dot(p, x + 45, y + 27, 15, FAMCOL[fam]);
+          const fb = dot(p, x + 45, y + 27, 15, FAMCOL[fam], idp ? idp + "-dot-" + i : null);
+          const svg = window.ADEN_ICONS[name];
+          if (svg) {
+            const ic = mk(p, "b", { left: x + 22 + "px", top: y + 2 + "px", width: "46px", height: "46px" }, idp ? idp + "-ic-" + i : null);
+            ic.innerHTML = svg;
+            if (!idp) fb.style.opacity = 0;
+          }
           const [a, b] = wrap2(name);
           txt(p, x + 1, y + 50, 1, C.TEXT, a);
           txt(p, x + 1, y + 70, 1, C.TEXT, b);
@@ -483,7 +490,7 @@
         ["wooden-block bed", "F"], ["wooden-block chair", "F"], ["ironwood bed", "F"], ["ironwood chair", "F"], ["ironwood dresser", "F"],
       ];
       const lyWood = layer("items-wood", false);
-      grid(lyWood, WOOD, "< All >", "grid-pill");
+      grid(lyWood, WOOD, "< All >", "grid-pill", "wood");
       at(lyWood, 0, 0, C.TEXT, "Search: WOOD   86 found");
       at(lyWood, 22, 0, C.WARN, "Added 40 x hardwood to your pockets", "items-status").style.opacity = 0;
       at(lyWood, 23, 0, C.TEXT, "wood   (0AA6, page 1/5)", "items-info");
@@ -582,6 +589,9 @@
         dot(lyIs, 46, 264 + 20 * i, 7, VCOL[s % 8]);
         if (m) box(lyIs, 152, GY(7 + i) - 1, 40, 18, 9, C.WARNBG);
       });
+      dot(lyIs, 46, GY(18) + 8, 7, "#7DBF5A");
+      at(lyIs, 18, 4, C.TEXT, "Weeds");
+      atr(lyIs, 18, 24, C.TEXT, "37");
       at(lyIs, 5, 2, C.DIM, "Villagers 10/10");
       at(lyIs, 6, 4, C.TEXT, "Everyone");
       VIL.forEach(([n, s, f, m], i) => {
@@ -715,7 +725,7 @@
       const abInfo = mk(lyAb, "ly", {}, "about-info");
       box(abInfo, 184, 180, 366, 92, 18, C.WHITE);
       [4, 5, 6].forEach((r) => dot(abInfo, 210, GY(r) + 8, 6, C.OK));
-      big(abInfo, 198, 120, 1.6, C.TEXT, "v0.6.0-beta.14");
+      big(abInfo, 198, 120, 1.6, C.TEXT, "v0.6.0-beta.15");
       at(abInfo, 2, 21, C.DIM, "for ACNH 3.0.2 / 3.0.3");
       at(abInfo, 4, 24, C.TEXT, "Player data"); at(abInfo, 4, 39, C.DIM, "found, 3 players");
       at(abInfo, 5, 24, C.TEXT, "Island"); at(abInfo, 5, 39, C.DIM, "found");
@@ -833,8 +843,8 @@
       caption("about", S.about + 0.1, S.outro);
 
       /* camera: push in on the widget being used, pull back before the next tab */
-      function push(t, s, pc) {
-        const to = { x: 12 - 22.5 * s, y: 540 - s * (15 + 1.5 * pc), scale: s };
+      function push(t, s, pc, tx) {
+        const to = { x: tx === undefined ? 12 - 22.5 * s : tx, y: 540 - s * (15 + 1.5 * pc), scale: s };
         tl.fromTo("#cam", { x: 0, y: 0, scale: 1 }, { ...to, duration: 0.5, ease: "power2.inOut", immediateRender: false }, t);
         return to;
       }
@@ -854,14 +864,21 @@
         glide("#key-pill", s + 1.55, kp(4, 1), kp(3, 0), 0.14);
         steps("q-type", [[0, "Search: _   11240 found"], [s + 0.8, "Search: W_   2481 found"], [s + 1.2, "Search: WO_   512 found"], [s + 1.4, "Search: WOO_   97 found"], [s + 1.75, "Search: WOOD_   86 found"]]);
         hide("#items-type", s + 2.1); show("#items-wood", s + 2.1);
-        const cam = push(s + 2.15, 1.3, 360);
+        /* the grid fills the frame up to the bubble; the text column (panel x 30) stays on screen */
+        const cam = push(s + 2.15, 1.36, 365, 16 - 1.36 * 67.5);
+        /* each tile shows its family colour until its icon is loaded, then the icon */
+        WOOD.forEach((it, i) => {
+          const t = s + 2.3 + ((i % 5) + Math.floor(i / 5)) * 0.06;
+          tl.fromTo("#wood-ic-" + i, { opacity: 0, scale: 0.55 }, { opacity: 1, scale: 1, duration: 0.32, ease: "back.out(2)" }, t);
+          hide("#wood-dot-" + i, t + 0.04);
+        });
         gsap.set("#grid-pill", { x: 0, y: 0 });
-        glide("#grid-pill", s + 2.6, { x: 0 }, { x: 100 });
-        glide("#grid-pill", s + 2.85, { x: 100 }, { x: 200 });
-        steps("items-info", [[0, "wood   (0AA6, page 1/5)"], [s + 2.6, "softwood   (0AA7, page 1/5)"], [s + 2.85, "hardwood   (0AA8, page 1/5)"]]);
+        glide("#grid-pill", s + 3.0, { x: 0 }, { x: 100 });
+        glide("#grid-pill", s + 3.25, { x: 100 }, { x: 200 });
+        steps("items-info", [[0, "wood   (0AA6, page 1/5)"], [s + 3.0, "softwood   (0AA7, page 1/5)"], [s + 3.25, "hardwood   (0AA8, page 1/5)"]]);
         const QTY = [2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40];
-        steps("items-amt", [[0, "Amount: 1 (max 1200)   To: pockets of Mika"], ...QTY.map((q, i) => [s + 3.1 + i * 0.065, "Amount: " + q + " (max 1200)   To: pockets of Mika"])]);
-        show("#items-status", s + 4.1);
+        steps("items-amt", [[0, "Amount: 1 (max 1200)   To: pockets of Mika"], ...QTY.map((q, i) => [s + 3.5 + i * 0.065, "Amount: " + q + " (max 1200)   To: pockets of Mika"])]);
+        show("#items-status", s + 4.45);
         pull(s + 5.5, cam);
       }
 

@@ -56,7 +56,7 @@ Aden Modmenu Enhance starts from [AdenDev's Aden Modmenu](https://github.com/Dev
 ## Screenshots
 
 <p align="center">
-  <em>(Frames from the presentation video, which redraws the menu from its layout code)</em>
+  <em>(Frames from the presentation video, which redraws the menu from its layout code; the item icons are drawn stand-ins for the game's own)</em>
 </p>
 
 <div align="center">

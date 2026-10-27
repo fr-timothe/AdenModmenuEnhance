@@ -18,5 +18,10 @@
   - nested_structure / file_too_large: it's a single file like the BetterAimaira reference,
     because the logo carry and the camera cross scene boundaries.
 - Weakest shot: About (2.6 s): it's short, and nothing changes in it but the page.
+- Item icons: original SVG drawings (assets/icons/icons.js), one per item on screen, placed like
+  draw_grid (46x46 at tile x+22, y+2). They stand in for the game's own icons, which the real menu
+  loads; each tile shows its family colour first, then its icon pops in, as in the game.
+- Name and version follow src/menu.c and src/aden.h: "Aden Modmenu Enhance", v0.6.0-beta.15;
+  the Island list has the Weeds row (WEED_ROW 18).
 - Invented content: item IDs, the player and villager names, the mod folder names and the
   counts are plausible sample data, not taken from a save.
